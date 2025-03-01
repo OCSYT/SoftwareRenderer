@@ -1,5 +1,4 @@
 #include "raymarcher.h"
-#include <iostream>
 
 float Raymarcher::SphereSDF(const Vec3& Position, const Vec3& SphereCenter, float Radius) {
     return (Position - SphereCenter).Length() - Radius;

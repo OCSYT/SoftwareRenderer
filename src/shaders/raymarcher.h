@@ -3,6 +3,8 @@
 
 #include "../math/math.h"
 #include "../rendering/renderer.h"
+#include <iostream>
+
 
 class Raymarcher {
 public:
