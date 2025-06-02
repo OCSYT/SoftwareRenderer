@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <SignAssembly>true</SignAssembly>
+        <AssemblyOriginatorKeyFile>Renderer.snk</AssemblyOriginatorKeyFile>
+        <PublicSign>true</PublicSign>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="AssimpNet" Version="5.0.0-beta1" />
+      <PackageReference Include="MathStructs.FixedPoint" Version="2.0.2-Alpha" />
+      <PackageReference Include="Silk.NET" Version="2.22.0" />
+      <PackageReference Include="Silk.NET.Core" Version="2.22.0" />
+      <PackageReference Include="Silk.NET.GLFW" Version="2.22.0" />
+      <PackageReference Include="Silk.NET.Maths" Version="2.22.0" />
+      <PackageReference Include="Silk.NET.OpenGL" Version="2.22.0" />
+      <PackageReference Include="Silk.NET.Windowing" Version="2.22.0" />
+      <PackageReference Include="Silk.NET.Windowing.Common" Version="2.22.0" />
+      <PackageReference Include="Silk.NET.Windowing.Glfw" Version="2.22.0" />
+      <PackageReference Include="SixLabors.ImageSharp" Version="3.1.8" />
+    </ItemGroup>
+
+</Project>
