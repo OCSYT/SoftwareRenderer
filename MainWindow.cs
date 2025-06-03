@@ -7,7 +7,6 @@ using Silk.NET.Input;
 using System.Threading.Tasks;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Threading;
 
 namespace SoftwareRenderer
 {
@@ -79,14 +78,18 @@ namespace SoftwareRenderer
             Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
             Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             Gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
             SetupQuad();
             SetupShaders();
 
             StartEvent?.Invoke();
 
-            RenderScale = Math.Clamp(RenderScale, 1 / 8f, 1.0f);
-            RenderWidth = (int)(WindowWidth / (1 / RenderScale));
-            RenderHeight = (int)(WindowHeight / (1 / RenderScale));
+            // Allow render scale up to 4.0 for bigger resolutions
+            RenderScale = Math.Clamp(RenderScale, 1 / 8f, 1f);
+
+            RenderWidth = (int)(WindowWidth * RenderScale);
+            RenderHeight = (int)(WindowHeight * RenderScale);
+
             HandleResize(new Vector2D<int>(WindowWidth, WindowHeight));
         }
 
@@ -195,18 +198,20 @@ namespace SoftwareRenderer
                 Console.WriteLine($"Shader compile error: {Gl.GetShaderInfoLog(shader)}");
             }
         }
+
         private volatile bool ManualRenderRequested = false;
 
         public void RenderFrame()
         {
             ManualRenderRequested = true;
         }
+
         private void OnRender(double deltaTime)
         {
             if (!ManualRenderRequested)
                 return;
-            Gl.Clear(ClearBufferMask.ColorBufferBit);
 
+            Gl.Clear(ClearBufferMask.ColorBufferBit);
             Gl.BindTexture(TextureTarget.Texture2D, TextureHandle);
 
             int width = RenderWidth;
@@ -214,12 +219,11 @@ namespace SoftwareRenderer
 
             var flatColorBuffer = new Vector3[ColorBuffer.Length];
 
-
-                Parallel.For(0, ColorBuffer.Length, i =>
-                {
-                    Vector4 Pixel = ColorBuffer[i];
-                    flatColorBuffer[i] = new Vector3(Pixel.X, Pixel.Y, Pixel.Z);
-                });
+            Parallel.For(0, ColorBuffer.Length, i =>
+            {
+                Vector4 pixel = ColorBuffer[i];
+                flatColorBuffer[i] = new Vector3(pixel.X, pixel.Y, pixel.Z);
+            });
 
             GCHandle gcHandle = GCHandle.Alloc(flatColorBuffer, GCHandleType.Pinned);
             try
@@ -240,47 +244,47 @@ namespace SoftwareRenderer
             Gl.UseProgram(ShaderProgram);
             Gl.BindVertexArray(VaoHandle);
             Gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
+
+            ManualRenderRequested = false;
         }
 
         void HandleResize(Vector2D<int> newSize)
         {
-            RenderScale = Math.Clamp(RenderScale, 1 / 8f, 1.0f);
+            RenderScale = Math.Clamp(RenderScale, 1 / 8f, 4.0f);
+
             WindowWidth = newSize.X;
             WindowHeight = newSize.Y;
-            RenderWidth = (int)(WindowWidth / (1 / RenderScale));
-            RenderHeight = (int)(WindowHeight / (1 / RenderScale));
 
-            if (newSize.X <= 0 || newSize.Y <= 0)
+            RenderWidth = (int)(WindowWidth * RenderScale);
+            RenderHeight = (int)(WindowHeight * RenderScale);
+
+            if (RenderWidth <= 0 || RenderHeight <= 0)
             {
-                Console.WriteLine("Resize ignored due to zero dimension.");
+                Console.WriteLine("Resize ignored due to zero render dimensions.");
                 return;
             }
 
             Gl.BindTexture(TextureTarget.Texture2D, TextureHandle);
 
-            Vector4[] oldColorBuffer;
-            float[] oldDepthBuffer;
+            Vector4[] oldColorBuffer = ColorBuffer;
+            float[] oldDepthBuffer = DepthBuffer;
 
+            int oldWidth = oldColorBuffer?.Length > 0 ? oldColorBuffer.Length / (oldDepthBuffer?.Length > 0 ? oldDepthBuffer.Length / oldColorBuffer.Length : 1) : 0;
+            // But safer to keep old width/height:
+            oldWidth = oldColorBuffer?.Length > 0 && RenderWidth != 0 ? oldColorBuffer.Length / RenderHeight : RenderWidth;
+            int oldHeight = oldColorBuffer?.Length > 0 ? oldColorBuffer.Length / oldWidth : RenderHeight;
 
-                oldColorBuffer = ColorBuffer;
-            
-                oldDepthBuffer = DepthBuffer;
+            Vector4[] newColorBuffer = new Vector4[RenderWidth * RenderHeight];
+            float[] newDepthBuffer = new float[RenderWidth * RenderHeight];
 
-
-            int oldWidth = RenderWidth;
-            int oldHeight = RenderHeight;
-
-            Vector4[] newColorBuffer = new Vector4[newSize.X * newSize.Y];
-            float[] newDepthBuffer = new float[newSize.X * newSize.Y];
-
-            int copyHeight = Math.Min(oldHeight, newSize.Y);
-            int copyWidth = Math.Min(oldWidth, newSize.X);
+            int copyHeight = Math.Min(oldHeight, RenderHeight);
+            int copyWidth = Math.Min(oldWidth, RenderWidth);
 
             if (oldColorBuffer != null)
             {
                 Parallel.For(0, copyHeight, y =>
                 {
-                    int newRowStart = y * newSize.X;
+                    int newRowStart = y * RenderWidth;
                     int oldRowStart = y * oldWidth;
                     for (int x = 0; x < copyWidth; x++)
                     {
@@ -293,7 +297,7 @@ namespace SoftwareRenderer
             {
                 Parallel.For(0, copyHeight, y =>
                 {
-                    int newRowStart = y * newSize.X;
+                    int newRowStart = y * RenderWidth;
                     int oldRowStart = y * oldWidth;
                     for (int x = 0; x < copyWidth; x++)
                     {
@@ -302,11 +306,8 @@ namespace SoftwareRenderer
                 });
             }
 
-
-                ColorBuffer = newColorBuffer;
-
-                DepthBuffer = newDepthBuffer;
-
+            ColorBuffer = newColorBuffer;
+            DepthBuffer = newDepthBuffer;
 
             uint scaledWidth = (uint)(WindowWidth / RenderScale);
             uint scaledHeight = (uint)(WindowHeight / RenderScale);
@@ -333,7 +334,7 @@ namespace SoftwareRenderer
             Gl.DeleteVertexArray(VaoHandle);
             Gl.DeleteProgram(ShaderProgram);
         }
-        
+
         private int GetIndex(int x, int y) => y * RenderWidth + x;
 
         // Pixel methods for ColorBuffer
@@ -342,9 +343,7 @@ namespace SoftwareRenderer
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
             {
-
-                    ColorBuffer[GetIndex(x, y)] = color;
-
+                ColorBuffer[GetIndex(x, y)] = color;
             }
         }
 
@@ -353,9 +352,7 @@ namespace SoftwareRenderer
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
             {
-
-                    return ColorBuffer[GetIndex(x, y)];
-
+                return ColorBuffer[GetIndex(x, y)];
             }
             return Vector4.Zero;
         }
@@ -363,13 +360,11 @@ namespace SoftwareRenderer
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void ClearColorBuffer(Vector4 clearColor)
         {
-
-                int count = ColorBuffer.Length;
-                Parallel.For(0, count, i =>
-                {
-                    ColorBuffer[i] = clearColor;
-                });
-
+            int count = ColorBuffer.Length;
+            Parallel.For(0, count, i =>
+            {
+                ColorBuffer[i] = clearColor;
+            });
         }
 
         // Depth methods for DepthBuffer
@@ -378,9 +373,7 @@ namespace SoftwareRenderer
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
             {
-
-                    DepthBuffer[GetIndex(x, y)] = depth;
-
+                DepthBuffer[GetIndex(x, y)] = depth;
             }
         }
 
@@ -389,9 +382,7 @@ namespace SoftwareRenderer
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
             {
-
-                    return DepthBuffer[GetIndex(x, y)];
-
+                return DepthBuffer[GetIndex(x, y)];
             }
             return float.MinValue;
         }
@@ -399,13 +390,11 @@ namespace SoftwareRenderer
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void ClearDepthBuffer()
         {
-
-                int count = DepthBuffer.Length;
-                Parallel.For(0, count, i =>
-                {
-                    DepthBuffer[i] = float.MinValue;
-                });
-
+            int count = DepthBuffer.Length;
+            Parallel.For(0, count, i =>
+            {
+                DepthBuffer[i] = float.MinValue;
+            });
         }
     }
 }

@@ -2,22 +2,22 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Silk.NET.Input;
-
+using System.Threading.Tasks;
 namespace SoftwareRenderer
 {
     public class Renderer
     {
         public float Time;
-        
+
         private class Camera
         {
             public Vector3 Position = new(0, 0, 0);
             public float Yaw;
             public float Pitch;
-            public float Speed = 5f;
+            public float Speed = 50f;
             public float Sensitivity = 0.1f;
 
-            public Matrix4x4 GetViewMatrix() => 
+            public Matrix4x4 GetViewMatrix() =>
                 Matrix4x4.CreateLookAt(Position, Position + GetFront(), Vector3.UnitY);
 
             public Vector3 GetFront()
@@ -32,172 +32,377 @@ namespace SoftwareRenderer
             }
         }
 
-        private static (List<Mesh> Meshes, List<Light> Lights) LoadedModel;
-        private static readonly List<Shaders.VertexInput[]> MeshVertexInputs = new();
         private static readonly Camera CameraObj = new();
         private static Vector2 LastMousePosition;
         private static bool FirstMouse = true;
         private Matrix4x4 ProjectionMatrix;
 
-        private static void InitializeVertexInputs()
+        private const int BaseChunkSize = 64;
+        private const float ChunkScale = 0.25f;
+        private const float HeightScale = 500f;
+        private const int ViewDistanceInChunks = 64;
+        private const int MaxLodLevel = 8;
+        float skirtDepth = 5f;
+
+        private readonly Dictionary<(int X, int Z, int Lod), (List<Shaders.VertexInput> Vertices, List<int> Indices, Matrix4x4 ModelMatrix)> LoadedChunks = new();
+        private static readonly PerlinNoise Perlin = new(12345);
+        private readonly object LoadedChunksLock = new();
+
+        private (List<Shaders.VertexInput>, List<int>, Matrix4x4) CreateTerrainChunk(int chunkX, int chunkZ, int lodLevel)
         {
-            MeshVertexInputs.Clear();
+            int lodFactor = 1 << lodLevel;
+            int effectiveChunkSize = BaseChunkSize / lodFactor;
+            int width = effectiveChunkSize + 1;
+            int depth = effectiveChunkSize + 1;
+            float vertexSpacing = 2f * lodFactor;
 
-            foreach (var mesh in LoadedModel.Meshes)
+            float[,] heightMap = new float[width, depth];
+            var baseVertices = new List<(Vector3 Position, Vector2 TexCoord, Vector4 Color)>(width * depth);
+
+            int octaves = 5;
+            float persistence = 0.5f;
+            float lacunarity = 2.0f;
+
+            for (int x = 0; x < width; x++)
             {
-                var vertexInputs = new Shaders.VertexInput[mesh.Triangles.Count * 3];
-                int vIndex = 0;
-
-                foreach (var tri in mesh.Triangles)
+                for (int z = 0; z < depth; z++)
                 {
-                    vertexInputs[vIndex++] = new Shaders.VertexInput
+                    float worldX = ((chunkX * BaseChunkSize + x * lodFactor)) * 2f / 100;
+                    float worldZ = ((chunkZ * BaseChunkSize + z * lodFactor) * 2f) / 100;
+
+                    float amplitude = 1.0f;
+                    float frequency = ChunkScale;
+                    float noiseHeight = 0f;
+
+                    for (int octave = 0; octave < octaves; octave++)
                     {
-                        Position = mesh.Vertices[tri.Index0].Position,
-                        TexCoord = mesh.Vertices[tri.Index0].TexCoord,
-                        Normal = mesh.Vertices[tri.Index0].Normal,
-                        Color = tri.Color
-                    };
-                    vertexInputs[vIndex++] = new Shaders.VertexInput
+                        float sampleX = worldX * frequency;
+                        float sampleZ = worldZ * frequency;
+
+                        float perlinValue = Perlin.Noise(sampleX, sampleZ) * 2f - 1f;
+                        noiseHeight += perlinValue * amplitude;
+
+                        amplitude *= persistence;
+                        frequency *= lacunarity;
+                    }
+
+                    heightMap[x, z] = noiseHeight * HeightScale * 0.5f;
+                }
+            }
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    float y = heightMap[x, z];
+                    if (y < 0) y = 0;
+
+                    Vector4 color = y < 0.01f
+                        ? new Vector4(0.0f, 0.3f, 0.7f, 1f)          // water
+                        : y < HeightScale * 0.05f
+                            ? new Vector4(0.76f, 0.7f, 0.5f, 1f)    // sand
+                            : y < HeightScale * 0.2f
+                                ? new Vector4(0.3f, 0.8f, 0.3f, 1f) // grass
+                                : new Vector4(0.5f, 0.5f, 0.5f, 1f); // mountain (gray)
+
+
+                    var position = new Vector3(x * vertexSpacing, y, z * vertexSpacing);
+                    var texCoord = new Vector2((float)x / effectiveChunkSize, (float)z / effectiveChunkSize);
+                    baseVertices.Add((position, texCoord, color));
+                }
+            }
+
+            var normals = new Vector3[width, depth];
+            var vertexCount = new int[width, depth];
+
+            for (int x = 0; x < effectiveChunkSize; x++)
+            {
+                for (int z = 0; z < effectiveChunkSize; z++)
+                {
+                    Vector3 v0 = baseVertices[x * depth + z].Position;
+                    Vector3 v1 = baseVertices[(x + 1) * depth + z].Position;
+                    Vector3 v2 = baseVertices[x * depth + (z + 1)].Position;
+                    Vector3 v3 = baseVertices[(x + 1) * depth + (z + 1)].Position;
+
+                    Vector3 normal1 = Vector3.Normalize(Vector3.Cross(v2 - v0, v1 - v0));
+                    Vector3 normal2 = Vector3.Normalize(Vector3.Cross(v2 - v1, v3 - v1));
+
+                    normals[x, z] += normal1;
+                    normals[x, z + 1] += normal1;
+                    normals[x + 1, z] += normal1 + normal2;
+                    normals[x, z + 1] += normal2;
+                    normals[x + 1, z + 1] += normal2;
+
+                    vertexCount[x, z]++;
+                    vertexCount[x, z + 1]++;
+                    vertexCount[x + 1, z]++;
+                    vertexCount[x + 1, z + 1]++;
+                }
+            }
+
+            for (int x = 0; x < width; x++)
+            {
+                for (int z = 0; z < depth; z++)
+                {
+                    if (vertexCount[x, z] > 0)
                     {
-                        Position = mesh.Vertices[tri.Index1].Position,
-                        TexCoord = mesh.Vertices[tri.Index1].TexCoord,
-                        Normal = mesh.Vertices[tri.Index1].Normal,
-                        Color = tri.Color
-                    };
-                    vertexInputs[vIndex++] = new Shaders.VertexInput
+                        normals[x, z] = Vector3.Normalize(normals[x, z] / vertexCount[x, z]);
+                    }
+                }
+            }
+
+            var vertices = new List<Shaders.VertexInput>();
+            var indices = new List<int>();
+
+            for (int x = 0; x < effectiveChunkSize; x++)
+            {
+                for (int z = 0; z < effectiveChunkSize; z++)
+                {
+                    int i0 = x * depth + z;
+                    int i1 = (x + 1) * depth + z;
+                    int i2 = x * depth + (z + 1);
+                    int i3 = (x + 1) * depth + (z + 1);
+
+                    vertices.Add(new Shaders.VertexInput(
+                        baseVertices[i0].Position,
+                        baseVertices[i0].TexCoord,
+                        normals[x, z],
+                        baseVertices[i0].Color));
+
+                    vertices.Add(new Shaders.VertexInput(
+                        baseVertices[i2].Position,
+                        baseVertices[i2].TexCoord,
+                        normals[x, z + 1],
+                        baseVertices[i2].Color));
+
+                    vertices.Add(new Shaders.VertexInput(
+                        baseVertices[i1].Position,
+                        baseVertices[i1].TexCoord,
+                        normals[x + 1, z],
+                        baseVertices[i1].Color));
+
+                    vertices.Add(new Shaders.VertexInput(
+                        baseVertices[i3].Position,
+                        baseVertices[i3].TexCoord,
+                        normals[x + 1, z + 1],
+                        baseVertices[i3].Color));
+
+                    int baseIdx = vertices.Count - 4;
+                    indices.Add(baseIdx);
+                    indices.Add(baseIdx + 1);
+                    indices.Add(baseIdx + 2);
+
+                    indices.Add(baseIdx + 2);
+                    indices.Add(baseIdx + 1);
+                    indices.Add(baseIdx + 3);
+                }
+            }
+
+            Matrix4x4 modelMatrix = Matrix4x4.CreateTranslation(
+                chunkX * BaseChunkSize * 2f,
+                0,
+                chunkZ * BaseChunkSize * 2f);
+            
+            return (vertices, indices, modelMatrix);
+        }
+
+        private int DetermineLodLevel(Vector3 chunkCenter)
+        {
+            float distance = Vector3.Distance(chunkCenter, CameraObj.Position);
+            float lodDistanceThreshold = 50f;
+            
+            for (int lod = 0; lod < MaxLodLevel; lod++)
+            {
+                if (distance < lodDistanceThreshold * (1 << lod))
+                {
+                    return lod;
+                }
+            }
+            return MaxLodLevel;
+        }
+
+        private void RenderTerrain(MainWindow window)
+        {
+            int chunkWorldSize = BaseChunkSize * 2;
+            int currentChunkX = (int)(CameraObj.Position.X / chunkWorldSize);
+            int currentChunkZ = (int)(CameraObj.Position.Z / chunkWorldSize);
+
+            var neededChunks = new HashSet<(int, int, int)>(ViewDistanceInChunks * ViewDistanceInChunks * (MaxLodLevel + 1));
+
+            for (int dx = -ViewDistanceInChunks; dx <= ViewDistanceInChunks; dx++)
+            {
+                for (int dz = -ViewDistanceInChunks; dz <= ViewDistanceInChunks; dz++)
+                {
+                    int chunkX = currentChunkX + dx;
+                    int chunkZ = currentChunkZ + dz;
+                    
+                    Vector3 chunkCenter = new Vector3(
+                        chunkX * chunkWorldSize + chunkWorldSize / 2f,
+                        0,
+                        chunkZ * chunkWorldSize + chunkWorldSize / 2f);
+                    
+                    int lodLevel = DetermineLodLevel(chunkCenter);
+                    neededChunks.Add((chunkX, chunkZ, lodLevel));
+                    
+                }
+            }
+
+            List<(int, int, int)> chunksToLoad;
+            List<(int, int, int)> chunksToRemove;
+
+            lock (LoadedChunksLock)
+            {
+                chunksToRemove = new List<(int, int, int)>(LoadedChunks.Count);
+                chunksToLoad = new List<(int, int, int)>(neededChunks.Count);
+
+                foreach (var key in LoadedChunks.Keys)
+                {
+                    if (!neededChunks.Contains(key))
                     {
-                        Position = mesh.Vertices[tri.Index2].Position,
-                        TexCoord = mesh.Vertices[tri.Index2].TexCoord,
-                        Normal = mesh.Vertices[tri.Index2].Normal,
-                        Color = tri.Color
-                    };
+                        chunksToRemove.Add(key);
+                    }
                 }
 
-                MeshVertexInputs.Add(vertexInputs);
+                foreach (var chunkCoord in neededChunks)
+                {
+                    if (!LoadedChunks.ContainsKey(chunkCoord))
+                    {
+                        chunksToLoad.Add(chunkCoord);
+                    }
+                }
+            }
+
+            if (chunksToRemove.Count > 0)
+            {
+                var batchSize = Math.Max(1, chunksToRemove.Count / Environment.ProcessorCount);
+                Parallel.For(0, (chunksToRemove.Count + batchSize - 1) / batchSize, batchIndex =>
+                {
+                    int start = batchIndex * batchSize;
+                    int end = Math.Min(start + batchSize, chunksToRemove.Count);
+
+                    lock (LoadedChunksLock)
+                    {
+                        for (int i = start; i < end; i++)
+                        {
+                            LoadedChunks.Remove(chunksToRemove[i]);
+                        }
+                    }
+                });
+            }
+
+            if (chunksToLoad.Count > 0)
+            {
+                var batchSize = Math.Max(1, chunksToLoad.Count / Environment.ProcessorCount);
+                Parallel.For(0, (chunksToLoad.Count + batchSize - 1) / batchSize, batchIndex =>
+                {
+                    int start = batchIndex * batchSize;
+                    int end = Math.Min(start + batchSize, chunksToLoad.Count);
+
+                    for (int i = start; i < end; i++)
+                    {
+                        var chunkCoord = chunksToLoad[i];
+                        var chunk = CreateTerrainChunk(chunkCoord.Item1, chunkCoord.Item2, chunkCoord.Item3);
+
+                        lock (LoadedChunksLock)
+                        {
+                            if (!LoadedChunks.ContainsKey(chunkCoord))
+                            {
+                                LoadedChunks[chunkCoord] = chunk;
+                            }
+                        }
+                    }
+                });
+            }
+
+            List<(List<Shaders.VertexInput>, List<int>, Matrix4x4)> chunksSnapshot;
+            lock (LoadedChunksLock)
+            {
+                chunksSnapshot = new List<(List<Shaders.VertexInput>, List<int>, Matrix4x4)>(LoadedChunks.Count);
+                foreach (var chunk in LoadedChunks.Values)
+                {
+                    if (chunk.Vertices.Count > 0)
+                    {
+                        chunksSnapshot.Add(chunk);
+                    }
+                }
+            }
+
+            if (chunksSnapshot.Count > 0)
+            {
+                var batchSize = Math.Max(1, chunksSnapshot.Count / Environment.ProcessorCount);
+                Parallel.For(0, (chunksSnapshot.Count + batchSize - 1) / batchSize, batchIndex =>
+                {
+                    int start = batchIndex * batchSize;
+                    int end = Math.Min(start + batchSize, chunksSnapshot.Count);
+
+                    for (int i = start; i < end; i++)
+                    {
+                        var chunk = chunksSnapshot[i];
+                        Rasterizer.RenderMesh(
+                            window,
+                            chunk.Item1.ToArray(),
+                            chunk.Item2.ToArray(),
+                            chunk.Item3,
+                            CameraObj.GetViewMatrix(),
+                            ProjectionMatrix,
+                            VertexShader,
+                            input => FragmentShader(input));
+                    }
+                });
             }
         }
 
-        private Shaders.VertexOutput VertexShader(
-            Shaders.VertexInput input,
-            Matrix4x4 model,
-            Matrix4x4 view,
-            Matrix4x4 projection)
+        private Shaders.VertexOutput VertexShader(Shaders.VertexInput vertex, Matrix4x4 modelMatrix,
+            Matrix4x4 viewMatrix, Matrix4x4 projectionMatrix)
         {
-            Matrix4x4 modelView = model * view;
-            Matrix4x4 mvp = modelView * projection;
+            Vector4 worldPosition = Vector4.Transform(new Vector4(vertex.Position, 1), modelMatrix);
+            Vector4 viewPosition = Vector4.Transform(worldPosition, viewMatrix);
+            Vector4 clipPosition = Vector4.Transform(viewPosition, projectionMatrix);
 
-            Vector4 clipPosition = Vector4.Transform(new Vector4(input.Position, 1f), mvp);
-
-            Matrix4x4 normalMatrix = Matrix4x4.Invert(model, out var modelInverse) 
-                ? Matrix4x4.Transpose(modelInverse) 
-                : Matrix4x4.Identity;
-                
-            Vector3 normalWorld = Vector3.Normalize(Vector3.TransformNormal(input.Normal, normalMatrix));
+            Vector3 worldNormal = Vector3.TransformNormal(vertex.Normal, modelMatrix);
+            worldNormal = Vector3.Normalize(worldNormal);
 
             return new Shaders.VertexOutput
             {
                 ClipPosition = clipPosition,
-                Color = input.Color,
-                TexCoord = input.TexCoord,
-                Normal = input.Normal,
-                ScreenCoords = Vector2.Zero,
-                Data = { ["NormalWorld"] = normalWorld }
+                Data = { ["WorldNormal"] = worldNormal },
+                TexCoord = vertex.TexCoord,
+                Color = vertex.Color,
+                Normal = vertex.Normal,
+                Interpolate = false
             };
         }
 
-        private static readonly float[,] BayerMatrix4x4 = 
+        private Vector4 FragmentShader(Shaders.VertexOutput input)
         {
-            { 0.0f/16,  8.0f/16,  2.0f/16, 10.0f/16 },
-            { 12.0f/16, 4.0f/16, 14.0f/16,  6.0f/16 },
-            { 3.0f/16, 11.0f/16,  1.0f/16,  9.0f/16 },
-            { 15.0f/16,  7.0f/16, 13.0f/16,  5.0f/16 }
-        };
+            Vector3 lightDir = Vector3.Normalize(new Vector3(-0.3f, -1f, 0.3f));
+            Vector3 worldNormal = (Vector3)input.Data["WorldNormal"];
+            float diff = MathF.Max(0f, Vector3.Dot(worldNormal, -lightDir));
+            
+            Vector4 baseColor = input.Color;
 
-        private Vector4? FragmentShader(
-            Shaders.VertexOutput input,
-            Texture texture,
-            Vector3 color,
-            int screenWidth,
-            int screenHeight)
-        {
-            var lightDirection = Vector3.Normalize(new Vector3(100, 100, -100));
-            const float ambientLight = 0.1f;
+            float fogStart = 500f;
+            float fogEnd = 1000f;
+            Vector4 fogColor = new Vector4(0.5f, 0.6f, 1f, 1f);
+            float depth = input.ClipPosition.Z;
+            float fogFactor = Math.Clamp((fogEnd - depth) / (fogEnd - fogStart), 0f, 1f);
+            fogFactor = fogFactor * fogFactor * (3f - 2f * fogFactor);
+            Vector4 finalColor = Vector4.Lerp(fogColor, baseColor * (0.1f + 0.9f * diff), fogFactor);
 
-            input.Data.TryGetValue("NormalWorld", out var normalObj);
-            var normalWorld = normalObj is Vector3 n ? n : Vector3.Zero;
-
-            float lighting = MathF.Max(ambientLight, Vector3.Dot(normalWorld, lightDirection));
-            Vector4 texColor = texture?.Sample(input.TexCoord) ?? Vector4.One;
-
-            Vector3 shadedColor = new Vector3(texColor.X, texColor.Y, texColor.Z)
-                                * lighting
-                                * new Vector3(input.Color.X, input.Color.Y, input.Color.Z)
-                                * color;
-
-            int x = Math.Clamp((int)(input.ScreenCoords.X * screenWidth), 0, screenWidth - 1);
-            int y = Math.Clamp((int)(input.ScreenCoords.Y * screenHeight), 0, screenHeight - 1);
-
-            int bx = x % 4;
-            int by = y % 4;
-            float threshold = BayerMatrix4x4[by, bx];
-
-            if (texColor.W < threshold)
-                return null;
-
-            return new Vector4(shadedColor, 1.0f);
-        }
-
-        private void PostProcess(MainWindow window)
-        {
-            static Vector3 ApplyAces(Vector3 color)
-            {
-                Vector3 a = color * (2.51f * color + new Vector3(0.03f));
-                Vector3 b = color * (2.43f * color + new Vector3(0.59f)) + new Vector3(0.14f);
-                return Vector3.Clamp(a / b, Vector3.Zero, Vector3.One);
-            }
-
-            static float ApplyGamma(float linear)
-            {
-                linear = float.Clamp(linear, 0f, 1f);
-                return linear <= 0.0031308f 
-                    ? linear * 12.92f 
-                    : 1.055f * MathF.Pow(linear, 1f / 2.4f) - 0.055f;
-            }
-
-            int width = window.RenderWidth;
-            int height = window.RenderHeight;
-
-            Parallel.For(0, height, y =>
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    Vector4 color = window.GetPixel(x, y);
-                    Vector3 aces = ApplyAces(new Vector3(color.X, color.Y, color.Z));
-                    Vector3 gamma = new Vector3(
-                        ApplyGamma(aces.X),
-                        ApplyGamma(aces.Y),
-                        ApplyGamma(aces.Z)
-                    );
-
-                    window.SetPixel(x, y, new Vector4(gamma, color.W));
-                }
-            });
+            return new Vector4(finalColor.X, finalColor.Y, finalColor.Z, 1f);
         }
 
         public void Main(string[] args)
         {
             var window = new MainWindow("Software Renderer Demo");
-            window.RenderScale = 0.125f;
+            window.RenderScale = 1/4f;
 
             IInputContext inputContext = null;
             IKeyboard keyboard = null;
             IMouse mouse = null;
-
+            
             window.StartEvent += () =>
             {
-                LoadedModel = Model.LoadModel("./Assets/models/sponza.obj");
-                InitializeVertexInputs();
-
                 inputContext = window.InputContext;
                 keyboard = inputContext.Keyboards[0];
                 mouse = inputContext.Mice[0];
@@ -220,8 +425,10 @@ namespace SoftwareRenderer
                 };
             };
 
+            Rasterizer.RenderDebugMode = Rasterizer.DebugMode.None;
             window.UpdateEvent += deltaTime =>
             {
+                Console.WriteLine("FPS: " + MathF.Round((float)(1 / deltaTime)));
                 ProjectionMatrix = Matrix4x4.CreatePerspectiveFieldOfView(
                     MathF.PI / 3,
                     (float)window.RenderWidth / window.RenderHeight,
@@ -245,44 +452,7 @@ namespace SoftwareRenderer
                 window.ClearDepthBuffer();
                 window.ClearColorBuffer(new Vector4(0.392f, 0.584f, 0.929f, 1.0f));
 
-                var view = CameraObj.GetViewMatrix();
-                var modelMatrix = Matrix4x4.CreateScale(.01f) *
-                                 Matrix4x4.CreateRotationY(0) *
-                                 Matrix4x4.CreateTranslation(Vector3.Zero);
-
-                int count = 0;
-                Parallel.For(0, LoadedModel.Meshes.Count, i =>
-                {
-                    var mesh = LoadedModel.Meshes[i];
-                    if (!FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, modelMatrix, view, ProjectionMatrix))
-                        return;
-
-                    count++;
-                    var vertexInputs = MeshVertexInputs[i];
-
-                    Texture texture = null;
-                    Vector3 color = Vector3.One;
-
-                    if (mesh.TextureIndex != -1)
-                    {
-                        texture = Model.LoadedTextures[mesh.TextureIndex];
-                    }
-
-                    Rasterizer.RenderMesh(
-                        window,
-                        vertexInputs,
-                        modelMatrix,
-                        view,
-                        ProjectionMatrix,
-                        VertexShader,
-                        input => FragmentShader(input, texture, color, window.RenderWidth, window.RenderHeight),
-                        Rasterizer.CullMode.Back,
-                        Rasterizer.DepthTest.LessEqual,
-                        Rasterizer.BlendMode.Alpha);
-                });
-
-                Console.WriteLine($"Meshes on screen: {count}");
-                PostProcess(window);
+                RenderTerrain(window);
                 window.RenderFrame();
             };
 

@@ -25,54 +25,20 @@ namespace SoftwareRenderer
 
     public class Mesh
     {
-        public BoundingSphere SphereBounds { get; private set; }
-        public List<Shaders.Vertex> Vertices { get; }
-        public List<Rasterizer.Triangle> Triangles { get; }
+        public BoundingSphere SphereBounds { get; set; }
+        public List<Shaders.VertexInput> Vertices { set; get; }
+        public List<int> Indices { set; get; }
         public Material Material { get; }
         public string ModelRootPath;
 
         public int TextureIndex { get; set; } = -1;
 
-        public Mesh(List<Shaders.Vertex> vertices, List<Rasterizer.Triangle> triangles, Material material)
+        public Mesh(List<Shaders.VertexInput> vertices, List<int> indices, Material material = null)
         {
             Vertices = vertices;
-            Triangles = triangles;
+            Indices = indices;
             Material = material;
         }
-
-        public void CalculateBoundingSphere()
-        {
-            if (Vertices.Count == 0)
-            {
-                SphereBounds = new BoundingSphere(Vector3.Zero, 0f);
-                return;
-            }
-
-            // Compute min and max from vertices
-            Vector3 min = new Vector3(float.PositiveInfinity);
-            Vector3 max = new Vector3(float.NegativeInfinity);
-
-            foreach (var vertex in Vertices)
-            {
-                min = Vector3.Min(min, vertex.Position);
-                max = Vector3.Max(max, vertex.Position);
-            }
-
-            // Center is midpoint of min and max
-            Vector3 center = (min + max) / 2f;
-
-            // Radius is max distance from center to any vertex
-            float radius = 0f;
-            foreach (var vertex in Vertices)
-            {
-                float dist = Vector3.Distance(vertex.Position, center);
-                if (dist > radius)
-                    radius = dist;
-            }
-
-            SphereBounds = new BoundingSphere(center, radius);
-        }
-
     }
 
     public class Light
@@ -140,9 +106,9 @@ namespace SoftwareRenderer
                 {
                     var mesh = scene.Meshes[meshIndex];
 
-                    var vertices = new List<Shaders.Vertex>(mesh.VertexCount);
-                    var triangles = new List<Rasterizer.Triangle>(mesh.FaceCount);
-
+                    var vertexDict = new Dictionary<(Vector3 pos, Vector3 normal, Vector2 uv), int>();
+                    var vertices = new List<Shaders.VertexInput>();
+                    var indices = new List<int>();
                     for (int i = 0; i < mesh.VertexCount; i++)
                     {
                         var pos = mesh.Vertices[i];
@@ -164,25 +130,55 @@ namespace SoftwareRenderer
 
                         var transformedNormal = Vector3.TransformNormal(normalVec, rotationOnly);
 
-                        vertices.Add(new Shaders.Vertex(
+                        var color = mesh.HasVertexColors(0)
+                            ? mesh.VertexColorChannels[0][i]
+                            : new Color4D(1, 1, 1, 1); 
+                        
+                        vertices.Add(new Shaders.VertexInput(
                             transformedPos,
                             new Vector2(texCoord.X, texCoord.Y),
-                            Vector3.Normalize(transformedNormal)
+                            Vector3.Normalize(transformedNormal),
+                            new Vector4(color.R, color.G, color.B, color.A)
                         ));
                     }
+                    
 
                     for (int i = 0; i < mesh.FaceCount; i++)
                     {
                         var face = mesh.Faces[i];
-                        if (face.IndexCount != 3)
-                            continue;
+                        if (face.IndexCount != 3) continue;
 
-                        triangles.Add(new Rasterizer.Triangle(
-                            face.Indices[0],
-                            face.Indices[1],
-                            face.Indices[2],
-                            Vector4.One
-                        ));
+                        for (int j = 0; j < 3; j++)
+                        {
+                            int vi = face.Indices[j];
+                            var pos = mesh.Vertices[vi];
+                            var normal = mesh.Normals[vi];
+                            var texCoord = mesh.HasTextureCoords(0) ? mesh.TextureCoordinateChannels[0][vi] : new Vector3D();
+
+                            var color = mesh.HasVertexColors(0)
+                                ? mesh.VertexColorChannels[0][i]
+                                : new Color4D(1, 1, 1, 1); 
+                            
+                            var key = (
+                                new Vector3(pos.X, pos.Y, pos.Z),
+                                new Vector3(normal.X, normal.Y, normal.Z),
+                                new Vector2(texCoord.X, texCoord.Y)
+                            );
+
+                            if (!vertexDict.TryGetValue(key, out int index))
+                            {
+                                index = vertices.Count;
+                                vertexDict[key] = index;
+                                vertices.Add(new Shaders.VertexInput(
+                                    Vector3.Transform(key.Item1, globalTransform),
+                                    key.Item3,
+                                    Vector3.Normalize(Vector3.TransformNormal(key.Item2, globalTransform)),
+                                    new Vector4(color.R, color.G, color.B, color.A)
+                                ));
+                            }
+
+                            indices.Add(index);
+                        }
                     }
 
                     var assimpMaterial = scene.Materials[mesh.MaterialIndex];
@@ -204,11 +200,13 @@ namespace SoftwareRenderer
 
                     var material = new Material(diffuseColor, specularColor, shininess, diffuseTexturePath);
 
-                    Mesh meshToAdd = new Mesh(vertices, triangles, material)
+                    Mesh meshToAdd = new Mesh(vertices, indices, material)
                     {
                         ModelRootPath = Path.GetDirectoryName(path) ?? string.Empty
                     };
-                    meshToAdd.CalculateBoundingSphere();
+
+                    
+                    meshToAdd.SphereBounds = FrustumCuller.CalculateBoundingSphere(vertices.ToArray());
 
                     // Load texture
                     if (!string.IsNullOrWhiteSpace(material.DiffuseTexturePath))

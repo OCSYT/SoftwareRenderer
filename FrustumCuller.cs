@@ -1,8 +1,9 @@
 using System.Numerics;
+using SoftwareRenderer;
 
 namespace SoftwareRenderer
 {
-    public struct BoundingSphere
+     public struct BoundingSphere
     {
         public Vector3 Center;
         public float Radius;
@@ -31,7 +32,67 @@ namespace SoftwareRenderer
     }
     public static class FrustumCuller
     {
+        public static BoundingSphere CalculateBoundingSphere(Shaders.VertexInput[] vertices)
+        {
+            if (vertices == null)
+                throw new ArgumentNullException(nameof(vertices));
 
+            int vertexCount = vertices.Length;
+            if (vertexCount == 0)
+                return new BoundingSphere(Vector3.Zero, 0f);
+            if (vertexCount == 1)
+                return new BoundingSphere(vertices[0].Position, 0f);
+
+            Vector3 p0 = vertices[0].Position;
+
+            // Find point furthest from p0
+            Vector3 p1 = p0;
+            float maxDistanceSq = 0f;
+            for (int i = 1; i < vertexCount; i++)
+            {
+                float distSq = Vector3.DistanceSquared(vertices[i].Position, p0);
+                if (distSq > maxDistanceSq)
+                {
+                    maxDistanceSq = distSq;
+                    p1 = vertices[i].Position;
+                }
+            }
+
+            // Find point furthest from p1
+            Vector3 p2 = p1;
+            maxDistanceSq = 0f;
+            for (int i = 0; i < vertexCount; i++)
+            {
+                float distSq = Vector3.DistanceSquared(vertices[i].Position, p1);
+                if (distSq > maxDistanceSq)
+                {
+                    maxDistanceSq = distSq;
+                    p2 = vertices[i].Position;
+                }
+            }
+
+            // Initial sphere center and radius
+            Vector3 center = (p1 + p2) * 0.5f;
+            float radius = (float)Math.Sqrt(maxDistanceSq) * 0.5f;
+
+            // Grow sphere to include all points
+            for (int i = 0; i < vertexCount; i++)
+            {
+                Vector3 pos = vertices[i].Position;
+                float distance = Vector3.Distance(pos, center);
+
+                if (distance > radius)
+                {
+                    float newRadius = (radius + distance) * 0.5f;
+                    float k = (newRadius - radius) / distance;
+                    center += (pos - center) * k;
+                    radius = newRadius;
+                }
+            }
+
+            return new BoundingSphere(center, radius);
+        }
+        
         public struct Frustum
         {
             public Plane Near;
@@ -75,21 +136,22 @@ namespace SoftwareRenderer
 
         public static bool IsSphereInFrustum(BoundingSphere bounds, Matrix4x4 modelMatrix, Matrix4x4 viewMatrix, Matrix4x4 projectionMatrix)
         {
-            // Transform sphere center to world space
+            // Transform sphere center to world space (considering full transformation)
             Vector3 worldCenter = Vector3.Transform(bounds.Center, modelMatrix);
-            
-            // Calculate transformed radius (approximate for non-uniform scaling)
+    
+            // Calculate transformed radius (using the maximum scale factor)
+            // More accurate than using separate axis vectors
             float maxScale = MathF.Max(
                 MathF.Max(
                     new Vector3(modelMatrix.M11, modelMatrix.M12, modelMatrix.M13).Length(),
                     new Vector3(modelMatrix.M21, modelMatrix.M22, modelMatrix.M23).Length()),
                 new Vector3(modelMatrix.M31, modelMatrix.M32, modelMatrix.M33).Length());
-            
+    
             float worldRadius = bounds.Radius * maxScale;
 
-            // Create combined view-projection matrix
-            Matrix4x4 viewProjection = viewMatrix * projectionMatrix;
-            
+            // Create combined view-projection matrix (correct multiplication order)
+            Matrix4x4 viewProjection = Matrix4x4.Multiply(viewMatrix, projectionMatrix);
+    
             // Create frustum planes from the combined matrix
             Frustum frustum = CreateFrustumFromMatrix(viewProjection);
 
