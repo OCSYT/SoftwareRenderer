@@ -1,20 +1,35 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
-using Silk.NET.Input;
 using System.Threading.Tasks;
+using Silk.NET.Input;
+using Silk.NET.OpenGL.Extensions.ImGui;
+using ImGuiNET;
+
 namespace SoftwareRenderer
 {
     public class Renderer
     {
         public float Time;
+        public bool MouseLocked = true;
+        private bool WasEscapePressed = false;
 
+        private float FogStart = 1;
+        private float FogEnd = 50;
+        private Vector4 FogColor = new(0.5f, 0.6f, 1f, 1f);
+        private Vector3 LightEulerDegrees = new Vector3(-45, -45, 0);
+        private Vector3 LightDir = EulerToDirection(new Vector3(-45, -45, 0));
+        private Vector4 LightColor = Vector4.One;
+        private Vector3 ClearColor = Vector3.Zero;
+        private float FOV = 90;
+        private bool LoadedLayout = false;
         private class Camera
         {
-            public Vector3 Position = new(0, 0, 0);
-            public float Yaw;
+            public Vector3 Position = new Vector3(-10.610103f, 0.44594023f, -36.2275f);
+            public float Yaw = 90;
             public float Pitch;
-            public float Speed = 50f;
+            public float Speed = 10f;
             public float Sensitivity = 0.1f;
 
             public Matrix4x4 GetViewMatrix() =>
@@ -36,371 +51,184 @@ namespace SoftwareRenderer
         private static Vector2 LastMousePosition;
         private static bool FirstMouse = true;
         private Matrix4x4 ProjectionMatrix;
+        private SceneModel E1M1Model;
+        private readonly ConcurrentDictionary<string, Texture> CachedTextures = new();
 
-        private const int BaseChunkSize = 64;
-        private const float ChunkScale = 0.25f;
-        private const float HeightScale = 500f;
-        private const int ViewDistanceInChunks = 64;
-        private const int MaxLodLevel = 8;
-        float skirtDepth = 5f;
-
-        private readonly Dictionary<(int X, int Z, int Lod), (List<Shaders.VertexInput> Vertices, List<int> Indices, Matrix4x4 ModelMatrix)> LoadedChunks = new();
-        private static readonly PerlinNoise Perlin = new(12345);
-        private readonly object LoadedChunksLock = new();
-
-        private (List<Shaders.VertexInput>, List<int>, Matrix4x4) CreateTerrainChunk(int chunkX, int chunkZ, int lodLevel)
+        private class SceneModel
         {
-            int lodFactor = 1 << lodLevel;
-            int effectiveChunkSize = BaseChunkSize / lodFactor;
-            int width = effectiveChunkSize + 1;
-            int depth = effectiveChunkSize + 1;
-            float vertexSpacing = 2f * lodFactor;
-
-            float[,] heightMap = new float[width, depth];
-            var baseVertices = new List<(Vector3 Position, Vector2 TexCoord, Vector4 Color)>(width * depth);
-
-            int octaves = 5;
-            float persistence = 0.5f;
-            float lacunarity = 2.0f;
-
-            for (int x = 0; x < width; x++)
-            {
-                for (int z = 0; z < depth; z++)
-                {
-                    float worldX = ((chunkX * BaseChunkSize + x * lodFactor)) * 2f / 100;
-                    float worldZ = ((chunkZ * BaseChunkSize + z * lodFactor) * 2f) / 100;
-
-                    float amplitude = 1.0f;
-                    float frequency = ChunkScale;
-                    float noiseHeight = 0f;
-
-                    for (int octave = 0; octave < octaves; octave++)
-                    {
-                        float sampleX = worldX * frequency;
-                        float sampleZ = worldZ * frequency;
-
-                        float perlinValue = Perlin.Noise(sampleX, sampleZ) * 2f - 1f;
-                        noiseHeight += perlinValue * amplitude;
-
-                        amplitude *= persistence;
-                        frequency *= lacunarity;
-                    }
-
-                    heightMap[x, z] = noiseHeight * HeightScale * 0.5f;
-                }
-            }
-
-            for (int x = 0; x < width; x++)
-            {
-                for (int z = 0; z < depth; z++)
-                {
-                    float y = heightMap[x, z];
-                    if (y < 0) y = 0;
-
-                    Vector4 color = y < 0.01f
-                        ? new Vector4(0.0f, 0.3f, 0.7f, 1f)          // water
-                        : y < HeightScale * 0.05f
-                            ? new Vector4(0.76f, 0.7f, 0.5f, 1f)    // sand
-                            : y < HeightScale * 0.2f
-                                ? new Vector4(0.3f, 0.8f, 0.3f, 1f) // grass
-                                : new Vector4(0.5f, 0.5f, 0.5f, 1f); // mountain (gray)
-
-
-                    var position = new Vector3(x * vertexSpacing, y, z * vertexSpacing);
-                    var texCoord = new Vector2((float)x / effectiveChunkSize, (float)z / effectiveChunkSize);
-                    baseVertices.Add((position, texCoord, color));
-                }
-            }
-
-            var normals = new Vector3[width, depth];
-            var vertexCount = new int[width, depth];
-
-            for (int x = 0; x < effectiveChunkSize; x++)
-            {
-                for (int z = 0; z < effectiveChunkSize; z++)
-                {
-                    Vector3 v0 = baseVertices[x * depth + z].Position;
-                    Vector3 v1 = baseVertices[(x + 1) * depth + z].Position;
-                    Vector3 v2 = baseVertices[x * depth + (z + 1)].Position;
-                    Vector3 v3 = baseVertices[(x + 1) * depth + (z + 1)].Position;
-
-                    Vector3 normal1 = Vector3.Normalize(Vector3.Cross(v2 - v0, v1 - v0));
-                    Vector3 normal2 = Vector3.Normalize(Vector3.Cross(v2 - v1, v3 - v1));
-
-                    normals[x, z] += normal1;
-                    normals[x, z + 1] += normal1;
-                    normals[x + 1, z] += normal1 + normal2;
-                    normals[x, z + 1] += normal2;
-                    normals[x + 1, z + 1] += normal2;
-
-                    vertexCount[x, z]++;
-                    vertexCount[x, z + 1]++;
-                    vertexCount[x + 1, z]++;
-                    vertexCount[x + 1, z + 1]++;
-                }
-            }
-
-            for (int x = 0; x < width; x++)
-            {
-                for (int z = 0; z < depth; z++)
-                {
-                    if (vertexCount[x, z] > 0)
-                    {
-                        normals[x, z] = Vector3.Normalize(normals[x, z] / vertexCount[x, z]);
-                    }
-                }
-            }
-
-            var vertices = new List<Shaders.VertexInput>();
-            var indices = new List<int>();
-
-            for (int x = 0; x < effectiveChunkSize; x++)
-            {
-                for (int z = 0; z < effectiveChunkSize; z++)
-                {
-                    int i0 = x * depth + z;
-                    int i1 = (x + 1) * depth + z;
-                    int i2 = x * depth + (z + 1);
-                    int i3 = (x + 1) * depth + (z + 1);
-
-                    vertices.Add(new Shaders.VertexInput(
-                        baseVertices[i0].Position,
-                        baseVertices[i0].TexCoord,
-                        normals[x, z],
-                        baseVertices[i0].Color));
-
-                    vertices.Add(new Shaders.VertexInput(
-                        baseVertices[i2].Position,
-                        baseVertices[i2].TexCoord,
-                        normals[x, z + 1],
-                        baseVertices[i2].Color));
-
-                    vertices.Add(new Shaders.VertexInput(
-                        baseVertices[i1].Position,
-                        baseVertices[i1].TexCoord,
-                        normals[x + 1, z],
-                        baseVertices[i1].Color));
-
-                    vertices.Add(new Shaders.VertexInput(
-                        baseVertices[i3].Position,
-                        baseVertices[i3].TexCoord,
-                        normals[x + 1, z + 1],
-                        baseVertices[i3].Color));
-
-                    int baseIdx = vertices.Count - 4;
-                    indices.Add(baseIdx);
-                    indices.Add(baseIdx + 1);
-                    indices.Add(baseIdx + 2);
-
-                    indices.Add(baseIdx + 2);
-                    indices.Add(baseIdx + 1);
-                    indices.Add(baseIdx + 3);
-                }
-            }
-
-            Matrix4x4 modelMatrix = Matrix4x4.CreateTranslation(
-                chunkX * BaseChunkSize * 2f,
-                0,
-                chunkZ * BaseChunkSize * 2f);
-            
-            return (vertices, indices, modelMatrix);
+            public List<Mesh> Meshes { get; init; }
         }
 
-        private int DetermineLodLevel(Vector3 chunkCenter)
+        private static Vector3[] GetSphereOffsets(float radius)
         {
-            float distance = Vector3.Distance(chunkCenter, CameraObj.Position);
-            float lodDistanceThreshold = 50f;
-            
-            for (int lod = 0; lod < MaxLodLevel; lod++)
+            List<Vector3> offsets = new(25) { Vector3.Zero };
+            Vector3[] directions =
             {
-                if (distance < lodDistanceThreshold * (1 << lod))
-                {
-                    return lod;
-                }
-            }
-            return MaxLodLevel;
+                new(1, 0, 0), new(-1, 0, 0), new(0, 1, 0), new(0, -1, 0), new(0, 0, 1), new(0, 0, -1),
+                new(1, 1, 0), new(-1, 1, 0), new(1, -1, 0), new(-1, -1, 0),
+                new(1, 0, 1), new(-1, 0, 1), new(1, 0, -1), new(-1, 0, -1),
+                new(0, 1, 1), new(0, -1, 1), new(0, 1, -1), new(0, -1, -1),
+                new(1, 1, 1), new(-1, -1, -1), new(-1, 1, 1), new(1, -1, -1),
+                new(1, -1, 1), new(-1, 1, -1)
+            };
+
+            foreach (var dir in directions)
+                offsets.Add(Vector3.Normalize(dir) * radius);
+
+            return offsets.ToArray();
         }
 
-        private void RenderTerrain(MainWindow window)
+        private static readonly Vector3[] SphereOffsets = GetSphereOffsets(0.15f);
+
+        private Vector3 MoveWithSlide(Vector3 currentPos, Vector3 desiredPos, float radius = 0.15f, int depth = 0)
         {
-            int chunkWorldSize = BaseChunkSize * 2;
-            int currentChunkX = (int)(CameraObj.Position.X / chunkWorldSize);
-            int currentChunkZ = (int)(CameraObj.Position.Z / chunkWorldSize);
+            const int MaxSlideAttempts = 3;
+            if (depth >= MaxSlideAttempts || E1M1Model == null)
+                return currentPos;
 
-            var neededChunks = new HashSet<(int, int, int)>(ViewDistanceInChunks * ViewDistanceInChunks * (MaxLodLevel + 1));
+            Vector3 moveVector = desiredPos - currentPos;
+            if (moveVector.LengthSquared() < 1e-6f)
+                return currentPos;
 
-            for (int dx = -ViewDistanceInChunks; dx <= ViewDistanceInChunks; dx++)
+            Vector3 direction = Vector3.Normalize(moveVector);
+            Vector3 hitNormal = Vector3.Zero;
+            float nearestHitDistance = float.MaxValue;
+            bool collisionDetected = false;
+
+            var modelMatrix = Matrix4x4.CreateScale(0.01f);
+
+            foreach (var mesh in E1M1Model.Meshes)
             {
-                for (int dz = -ViewDistanceInChunks; dz <= ViewDistanceInChunks; dz++)
+                var vertices = mesh.Vertices.ToArray();
+                var indices = mesh.Indices.ToArray();
+
+                foreach (var offset in SphereOffsets)
                 {
-                    int chunkX = currentChunkX + dx;
-                    int chunkZ = currentChunkZ + dz;
-                    
-                    Vector3 chunkCenter = new Vector3(
-                        chunkX * chunkWorldSize + chunkWorldSize / 2f,
-                        0,
-                        chunkZ * chunkWorldSize + chunkWorldSize / 2f);
-                    
-                    int lodLevel = DetermineLodLevel(chunkCenter);
-                    neededChunks.Add((chunkX, chunkZ, lodLevel));
-                    
-                }
-            }
+                    Vector3 rayOrigin = currentPos + offset;
 
-            List<(int, int, int)> chunksToLoad;
-            List<(int, int, int)> chunksToRemove;
-
-            lock (LoadedChunksLock)
-            {
-                chunksToRemove = new List<(int, int, int)>(LoadedChunks.Count);
-                chunksToLoad = new List<(int, int, int)>(neededChunks.Count);
-
-                foreach (var key in LoadedChunks.Keys)
-                {
-                    if (!neededChunks.Contains(key))
+                    if (Physics.Raycast(rayOrigin, direction, vertices, indices, modelMatrix,
+                        out float hitDistance, out _, out Vector3 normal, RaycastFaceMask.IgnoreBackfaces))
                     {
-                        chunksToRemove.Add(key);
-                    }
-                }
-
-                foreach (var chunkCoord in neededChunks)
-                {
-                    if (!LoadedChunks.ContainsKey(chunkCoord))
-                    {
-                        chunksToLoad.Add(chunkCoord);
-                    }
-                }
-            }
-
-            if (chunksToRemove.Count > 0)
-            {
-                var batchSize = Math.Max(1, chunksToRemove.Count / Environment.ProcessorCount);
-                Parallel.For(0, (chunksToRemove.Count + batchSize - 1) / batchSize, batchIndex =>
-                {
-                    int start = batchIndex * batchSize;
-                    int end = Math.Min(start + batchSize, chunksToRemove.Count);
-
-                    lock (LoadedChunksLock)
-                    {
-                        for (int i = start; i < end; i++)
+                        if (hitDistance * hitDistance < moveVector.LengthSquared() && hitDistance < nearestHitDistance)
                         {
-                            LoadedChunks.Remove(chunksToRemove[i]);
+                            nearestHitDistance = hitDistance;
+                            hitNormal = normal;
+                            collisionDetected = true;
                         }
                     }
-                });
-            }
-
-            if (chunksToLoad.Count > 0)
-            {
-                var batchSize = Math.Max(1, chunksToLoad.Count / Environment.ProcessorCount);
-                Parallel.For(0, (chunksToLoad.Count + batchSize - 1) / batchSize, batchIndex =>
-                {
-                    int start = batchIndex * batchSize;
-                    int end = Math.Min(start + batchSize, chunksToLoad.Count);
-
-                    for (int i = start; i < end; i++)
-                    {
-                        var chunkCoord = chunksToLoad[i];
-                        var chunk = CreateTerrainChunk(chunkCoord.Item1, chunkCoord.Item2, chunkCoord.Item3);
-
-                        lock (LoadedChunksLock)
-                        {
-                            if (!LoadedChunks.ContainsKey(chunkCoord))
-                            {
-                                LoadedChunks[chunkCoord] = chunk;
-                            }
-                        }
-                    }
-                });
-            }
-
-            List<(List<Shaders.VertexInput>, List<int>, Matrix4x4)> chunksSnapshot;
-            lock (LoadedChunksLock)
-            {
-                chunksSnapshot = new List<(List<Shaders.VertexInput>, List<int>, Matrix4x4)>(LoadedChunks.Count);
-                foreach (var chunk in LoadedChunks.Values)
-                {
-                    if (chunk.Vertices.Count > 0)
-                    {
-                        chunksSnapshot.Add(chunk);
-                    }
                 }
             }
 
-            if (chunksSnapshot.Count > 0)
-            {
-                var batchSize = Math.Max(1, chunksSnapshot.Count / Environment.ProcessorCount);
-                Parallel.For(0, (chunksSnapshot.Count + batchSize - 1) / batchSize, batchIndex =>
-                {
-                    int start = batchIndex * batchSize;
-                    int end = Math.Min(start + batchSize, chunksSnapshot.Count);
+            if (!collisionDetected)
+                return desiredPos;
 
-                    for (int i = start; i < end; i++)
-                    {
-                        var chunk = chunksSnapshot[i];
-                        Rasterizer.RenderMesh(
-                            window,
-                            chunk.Item1.ToArray(),
-                            chunk.Item2.ToArray(),
-                            chunk.Item3,
-                            CameraObj.GetViewMatrix(),
-                            ProjectionMatrix,
-                            VertexShader,
-                            input => FragmentShader(input));
-                    }
-                });
+            Vector3 stopPos = currentPos + direction * (nearestHitDistance - 0.01f);
+            Vector3 remainingMove = desiredPos - stopPos;
+            Vector3 projectedMove = remainingMove - Vector3.Dot(remainingMove, hitNormal) * hitNormal;
+
+            return projectedMove.LengthSquared() < 1e-4f
+                ? stopPos
+                : MoveWithSlide(stopPos, stopPos + projectedMove, radius, depth + 1);
+        }
+
+        private void RenderE1M1(MainWindow window)
+        {
+            if (E1M1Model == null)
+            {
+                var result = Model.LoadModel("./Assets/e1m1/doom_E1M1.obj");
+                E1M1Model = new SceneModel { Meshes = result.Meshes };
             }
+
+            var modelMatrix = Matrix4x4.CreateScale(0.01f);
+            var viewMatrix = CameraObj.GetViewMatrix();
+
+            Parallel.ForEach(E1M1Model.Meshes, mesh =>
+            {
+                Texture texture = null;
+
+                if (mesh?.Material?.TexturePaths?.TryGetValue(TextureSlot.Diffuse, out var texturePath) == true)
+                {
+                    texture = CachedTextures.GetOrAdd(texturePath, SoftwareRenderer.Texture.LoadTexture);
+                }
+
+                if (FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, modelMatrix, viewMatrix, ProjectionMatrix))
+                {
+                    Rasterizer.RenderMesh(
+                        window,
+                        mesh.Vertices.ToArray(),
+                        mesh.Indices.ToArray(),
+                        modelMatrix,
+                        viewMatrix,
+                        ProjectionMatrix,
+                        VertexShader,
+                        input => FragmentShader(input, texture),
+                        Rasterizer.CullMode.Back);
+                }
+            });
         }
 
         private Shaders.VertexOutput VertexShader(Shaders.VertexInput vertex, Matrix4x4 modelMatrix,
             Matrix4x4 viewMatrix, Matrix4x4 projectionMatrix)
         {
-            Vector4 worldPosition = Vector4.Transform(new Vector4(vertex.Position, 1), modelMatrix);
-            Vector4 viewPosition = Vector4.Transform(worldPosition, viewMatrix);
-            Vector4 clipPosition = Vector4.Transform(viewPosition, projectionMatrix);
+            Vector4 worldPos = Vector4.Transform(new Vector4(vertex.Position, 1), modelMatrix);
+            Vector4 viewPos = Vector4.Transform(worldPos, viewMatrix);
+            Vector4 clipPos = Vector4.Transform(viewPos, projectionMatrix);
 
-            Vector3 worldNormal = Vector3.TransformNormal(vertex.Normal, modelMatrix);
-            worldNormal = Vector3.Normalize(worldNormal);
+            Vector3 worldNormal = Vector3.Normalize(Vector3.TransformNormal(vertex.Normal, modelMatrix));
 
             return new Shaders.VertexOutput
             {
-                ClipPosition = clipPosition,
+                ClipPosition = clipPos,
                 Data = { ["WorldNormal"] = worldNormal },
                 TexCoord = vertex.TexCoord,
                 Color = vertex.Color,
                 Normal = vertex.Normal,
-                Interpolate = false
+                Interpolate = true
             };
         }
 
-        private Vector4 FragmentShader(Shaders.VertexOutput input)
+        private Vector4 FragmentShader(Shaders.VertexOutput input, Texture texture = null)
         {
-            Vector3 lightDir = Vector3.Normalize(new Vector3(-0.3f, -1f, 0.3f));
             Vector3 worldNormal = (Vector3)input.Data["WorldNormal"];
-            float diff = MathF.Max(0f, Vector3.Dot(worldNormal, -lightDir));
-            
-            Vector4 baseColor = input.Color;
+            float diffuse = MathF.Max(0.25f, Vector3.Dot(worldNormal, -LightDir));
 
-            float fogStart = 500f;
-            float fogEnd = 1000f;
-            Vector4 fogColor = new Vector4(0.5f, 0.6f, 1f, 1f);
+            Vector4 textureColor = texture?.Sample(input.TexCoord) ?? Vector4.One;
+            Vector4 baseColor = input.Color * textureColor;
+
             float depth = input.ClipPosition.Z;
-            float fogFactor = Math.Clamp((fogEnd - depth) / (fogEnd - fogStart), 0f, 1f);
+            float fogFactor = Math.Clamp((FogEnd - depth) / (FogEnd - FogStart), 0f, 1f);
             fogFactor = fogFactor * fogFactor * (3f - 2f * fogFactor);
-            Vector4 finalColor = Vector4.Lerp(fogColor, baseColor * (0.1f + 0.9f * diff), fogFactor);
 
-            return new Vector4(finalColor.X, finalColor.Y, finalColor.Z, 1f);
+            Vector4 finalColor = Vector4.Lerp(FogColor, baseColor * (0.1f + 0.9f * diffuse) * LightColor, fogFactor);
+            return new Vector4(finalColor.X, finalColor.Y, finalColor.Z, baseColor.W);
+        }
+
+        private static Vector3 EulerToDirection(Vector3 eulerDegrees)
+        {
+            Vector3 radians = eulerDegrees * (MathF.PI / 180f);
+
+            Matrix4x4 rotation = Matrix4x4.CreateFromYawPitchRoll(
+                radians.Y,
+                radians.X,
+                radians.Z
+            );
+
+            Vector3 forward = -Vector3.UnitZ;
+            Vector3 direction = Vector3.Transform(forward, rotation);
+            return Vector3.Normalize(direction);
         }
 
         public void Main(string[] args)
         {
-            var window = new MainWindow("Software Renderer Demo");
-            window.RenderScale = 1/4f;
+            var window = new MainWindow("Software Renderer - E1M1")
+            {
+                RenderScale = 1/4f
+            };
 
             IInputContext inputContext = null;
             IKeyboard keyboard = null;
             IMouse mouse = null;
-            
+
             window.StartEvent += () =>
             {
                 inputContext = window.InputContext;
@@ -410,6 +238,7 @@ namespace SoftwareRenderer
 
                 mouse.MouseMove += (_, pos) =>
                 {
+                    if(MouseLocked == false) return;
                     if (FirstMouse)
                     {
                         LastMousePosition = pos;
@@ -420,39 +249,153 @@ namespace SoftwareRenderer
                     LastMousePosition = pos;
 
                     CameraObj.Yaw += delta.X * CameraObj.Sensitivity;
-                    CameraObj.Pitch -= delta.Y * CameraObj.Sensitivity;
-                    CameraObj.Pitch = Math.Clamp(CameraObj.Pitch, -89f, 89f);
+                    CameraObj.Pitch = Math.Clamp(CameraObj.Pitch - delta.Y * CameraObj.Sensitivity, -89f, 89f);
                 };
+
             };
 
             Rasterizer.RenderDebugMode = Rasterizer.DebugMode.None;
-            window.UpdateEvent += deltaTime =>
+
+
+            window.UpdateEvent += DeltaTime =>
             {
-                Console.WriteLine("FPS: " + MathF.Round((float)(1 / deltaTime)));
+                if (MouseLocked == false)
+                {
+                    var io = ImGui.GetIO();
+                    io.ConfigFlags |= ImGuiConfigFlags.DockingEnable | ImGuiConfigFlags.ViewportsEnable | ImGuiConfigFlags.DpiEnableScaleViewports;
+                    
+                    var Viewport = ImGui.GetMainViewport();
+                    ImGui.SetNextWindowPos(Viewport.Pos);
+                    ImGui.SetNextWindowSize(Viewport.Size);
+                    ImGui.SetNextWindowViewport(Viewport.ID);
+
+                    ImGui.DockSpaceOverViewport(Viewport.ID, Viewport, ImGuiDockNodeFlags.PassthruCentralNode);
+                    //ImGui.SaveIniSettingsToDisk("./Layouts/DefaultLayout.ini");
+                    ImGui.Begin("Renderer Controls", ImGuiWindowFlags.None);
+                    if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
+                    {
+                        ImGui.Text($"FPS: {(int)(1 / DeltaTime)}");
+                        ImGui.Text($"Frame Time: {DeltaTime * 1000:F2}ms");
+                    }
+
+                    if (ImGui.CollapsingHeader("Camera", ImGuiTreeNodeFlags.DefaultOpen))
+                    {
+                        ImGui.Text("Camera Position:");
+
+                        Vector3 camPos = CameraObj.Position;
+                        if (ImGui.DragFloat3("Position", ref camPos, 0.1f))
+                        {
+                            CameraObj.Position = camPos;
+                        }
+
+
+                        ImGui.Text("Rotation:");
+                        float Yaw = CameraObj.Yaw % 360;
+                        if (ImGui.DragFloat("Yaw (°)", ref Yaw, 0.5f))
+                        {
+                            CameraObj.Yaw = Yaw;
+                        }
+
+                        float Pitch = CameraObj.Pitch;
+                        if (ImGui.DragFloat("Pitch (°)", ref Pitch, 0.5f))
+                        {
+                            Pitch = Math.Clamp(Pitch, -89f, 89f);
+                            CameraObj.Pitch = Pitch;
+                        }
+
+                        ImGui.SliderFloat("Move Speed", ref CameraObj.Speed, 0.1f, 50f);
+                        ImGui.SliderFloat("Mouse Sensitivity", ref CameraObj.Sensitivity, 0.01f, 1f);
+                        ImGui.SliderFloat("FOV", ref FOV, 1f, 179f);
+
+                        Vector3 frontVec = CameraObj.GetFront();
+                        ImGui.Text($"Front: {frontVec.X:F2}, {frontVec.Y:F2}, {frontVec.Z:F2}");
+                    }
+
+
+                    if (ImGui.CollapsingHeader("Rendering", ImGuiTreeNodeFlags.DefaultOpen))
+                    {
+                        ImGui.Text($"Render Scale: {(int)(window.RenderScale * 100)}%%");
+                        if (ImGui.SliderFloat("##RenderScale", ref window.RenderScale, 0.1f, 1f))
+                        {
+                            window.UpdateRenderScale(window.RenderScale);
+                        }
+
+                        ImGui.Text("Clear Color:");
+                        ImGui.ColorEdit3("Clear Color", ref ClearColor);
+
+                        ImGui.Text("Debug Modes:");
+                        int debugMode = (int)Rasterizer.RenderDebugMode;
+                        ImGui.RadioButton("Normal", ref debugMode, (int)Rasterizer.DebugMode.None);
+                        ImGui.SameLine();
+                        ImGui.RadioButton("Wireframe", ref debugMode, (int)Rasterizer.DebugMode.Wireframe);
+                        Rasterizer.RenderDebugMode = (Rasterizer.DebugMode)debugMode;
+
+                        ImGui.Text("Fog Settings:");
+                        ImGui.SliderFloat("Fog Start", ref FogStart, 1f, 100f);
+                        ImGui.SliderFloat("Fog End", ref FogEnd, 10f, 500f);
+                        ImGui.ColorEdit4("Fog Color", ref FogColor);
+
+                        ImGui.Text("Light Settings:");
+
+                        if (ImGui.DragFloat3("Light Rotation", ref LightEulerDegrees, 0.5f))
+                        {
+                            LightDir = EulerToDirection(LightEulerDegrees);
+                        }
+
+                        ImGui.ColorEdit4("Light Color", ref LightColor);
+
+                        if (ImGui.CollapsingHeader("Scene Info", ImGuiTreeNodeFlags.DefaultOpen))
+                        {
+                            ImGui.Text($"Loaded Meshes: {E1M1Model?.Meshes?.Count ?? 0}");
+                            ImGui.Text($"Cached Textures: {CachedTextures.Count}");
+                            ImGui.Text($"Runtime: {Time:F2}s");
+                            ImGui.Text($"Window Size: {window.WindowWidth}x{window.WindowHeight}");
+                            ImGui.Text($"Render Size: {window.RenderWidth}x{window.RenderHeight}");
+                        }
+                    }
+
+                    ImGui.End();
+                    if (!LoadedLayout)
+                    {
+                        ImGui.LoadIniSettingsFromDisk("./Layouts/DefaultLayout.ini");
+                        LoadedLayout = true;    
+                    }
+
+                }
+
                 ProjectionMatrix = Matrix4x4.CreatePerspectiveFieldOfView(
-                    MathF.PI / 3,
+                    FOV * MathF.PI / 180,
                     (float)window.RenderWidth / window.RenderHeight,
-                    1f,
+                    0.1f,
                     100f);
 
-                Time += (float)deltaTime;
+                Time += (float)DeltaTime;
 
-                var front = CameraObj.GetFront();
-                var right = Vector3.Normalize(Vector3.Cross(front, Vector3.UnitY));
+                Vector3 desiredPosition = CameraObj.Position;
+                Vector3 front = CameraObj.GetFront();
+                Vector3 right = Vector3.Normalize(Vector3.Cross(front, Vector3.UnitY));
+                float moveStep = CameraObj.Speed * (float)DeltaTime;
 
-                if (keyboard.IsKeyPressed(Key.W))
-                    CameraObj.Position += front * CameraObj.Speed * (float)deltaTime;
-                if (keyboard.IsKeyPressed(Key.S))
-                    CameraObj.Position -= front * CameraObj.Speed * (float)deltaTime;
-                if (keyboard.IsKeyPressed(Key.A))
-                    CameraObj.Position -= right * CameraObj.Speed * (float)deltaTime;
-                if (keyboard.IsKeyPressed(Key.D))
-                    CameraObj.Position += right * CameraObj.Speed * (float)deltaTime;
+                if (keyboard.IsKeyPressed(Key.W)) desiredPosition += front * moveStep;
+                if (keyboard.IsKeyPressed(Key.S)) desiredPosition -= front * moveStep;
+                if (keyboard.IsKeyPressed(Key.A)) desiredPosition -= right * moveStep;
+                if (keyboard.IsKeyPressed(Key.D)) desiredPosition += right * moveStep;
+                bool isEscapePressed = keyboard.IsKeyPressed(Key.Escape);
+
+                if (isEscapePressed && !WasEscapePressed)
+                {
+                    MouseLocked = !MouseLocked;
+                    mouse.Cursor.CursorMode = MouseLocked ? CursorMode.Disabled : CursorMode.Normal;
+                    FirstMouse = true;
+                }
+
+                WasEscapePressed = isEscapePressed;
+
+                CameraObj.Position = MoveWithSlide(CameraObj.Position, desiredPosition);
 
                 window.ClearDepthBuffer();
-                window.ClearColorBuffer(new Vector4(0.392f, 0.584f, 0.929f, 1.0f));
-
-                RenderTerrain(window);
+                window.ClearColorBuffer(new Vector4(ClearColor.X, ClearColor.Y, ClearColor.Z, 1f));
+                RenderE1M1(window);
                 window.RenderFrame();
             };
 

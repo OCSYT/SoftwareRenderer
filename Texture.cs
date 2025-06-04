@@ -21,7 +21,6 @@ namespace SoftwareRenderer
 
         public Vector4 Sample(Vector2 uv)
         {
-            // Fast wrap using fractional part (correctly handles negatives)
             float u = uv.X - (int)uv.X;
             float v = uv.Y - (int)uv.Y;
             u += (u < 0) ? 1f : 0f;
@@ -30,18 +29,14 @@ namespace SoftwareRenderer
             // Convert to pixel coordinates
             int x = (int)(u * Width);
             int y = (int)(v * Height);
-
-            // Branchless clamp (modern CPUs handle conditional moves well)
+            
             x = x < 0 ? 0 : (x >= Width ? Width - 1 : x);
             y = y < 0 ? 0 : (y >= Height ? Height - 1 : y);
-
-            // Calculate index
+            
             int index = (y * Width + x) << 2;
 
-            // Read all bytes at once as uint for better pipelining
             uint pixelData = BitConverter.ToUInt32(Data, index);
-
-            // Convert to Vector4 using bit operations
+            
             const float inv255 = 1f / 255f;
             return new Vector4(
                 (pixelData & 0xFF) * inv255,
@@ -50,11 +45,12 @@ namespace SoftwareRenderer
                 ((pixelData >> 24) & 0xFF) * inv255);
         }
         
-        public static Texture LoadTexture(string filePath)
+        public static Texture LoadTexture(string FilePath)
         {
+            var FinalPath = FilePath;
             try
             {
-                using Image<Rgba32> image = Image.Load<Rgba32>(filePath);
+                using Image<Rgba32> image = Image.Load<Rgba32>(FinalPath);
                 int width = image.Width;
                 int height = image.Height;
                 byte[] data = new byte[width * height * 4]; // 4 bytes per pixel (RGBA)
@@ -71,12 +67,12 @@ namespace SoftwareRenderer
                         data[index + 3] = pixel.A;
                     }
                 }
-                Console.WriteLine("Loaded Texture: " + filePath);
+                Console.WriteLine("Loaded Texture: " + FinalPath);
                 return new Texture(data, width, height);
             }
             catch
             {
-                Console.WriteLine("Failed to load texture: " + filePath);
+                Console.WriteLine("Failed to load texture: " + FinalPath);
                 return null;
             }
         }

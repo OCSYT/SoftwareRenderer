@@ -62,7 +62,7 @@ namespace SoftwareRenderer
         }
 
         private const float Epsilon = 1e-6f;
-        private const int TileSize = 64;
+        private const int TileSize = 32;
         private static object[] TileLocks;
         private static int TilesX, TilesY;
 
@@ -75,18 +75,30 @@ namespace SoftwareRenderer
             _ => src
         };
 
+        private static readonly object TileLocksInitLock = new object();
+
         public static void InitializeTileLocks(int width, int height)
         {
-            TilesX = (width + TileSize - 1) / TileSize;
-            TilesY = (height + TileSize - 1) / TileSize;
-            TileLocks = new object[TilesX * TilesY];
-
-            for (int y = 0; y < TilesY; y++)
+            if (width <= 0 || height <= 0)
             {
-                for (int x = 0; x < TilesX; x++)
+                throw new ArgumentException("Width and height must be positive non-zero values.");
+            }
+
+            int tilesX = (width + TileSize - 1) / TileSize;
+            int tilesY = (height + TileSize - 1) / TileSize;
+
+            lock (TileLocksInitLock)
+            {
+                if (tilesX == TilesX && tilesY == TilesY && TileLocks != null && TileLocks.Length == tilesX * tilesY)
+                    return;
+
+                TilesX = tilesX;
+                TilesY = tilesY;
+                TileLocks = new object[TilesX * TilesY];
+
+                for (int i = 0; i < TileLocks.Length; i++)
                 {
-                    int index = y * TilesX + x;
-                    TileLocks[index] = new object();
+                    TileLocks[i] = new object();
                 }
             }
         }
@@ -170,11 +182,6 @@ namespace SoftwareRenderer
             DepthTest depthTest = DepthTest.LessEqual,
             BlendMode blendMode = BlendMode.Alpha)
         {
-            if (TileLocks == null || TilesX != (window.RenderWidth + TileSize - 1) / TileSize ||
-                TilesY != (window.RenderHeight + TileSize - 1) / TileSize)
-            {
-                InitializeTileLocks(window.RenderWidth, window.RenderHeight);
-            }
 
             int triangleCount = indices.Length / 3;
 
@@ -212,6 +219,7 @@ namespace SoftwareRenderer
                 }
             });
         }
+        
 
         private static void DrawLine(
             MainWindow window,
@@ -259,7 +267,16 @@ namespace SoftwareRenderer
 
                     if (startX > endX || startY > endY) continue;
 
-                    lock (tileLocks[tileY * TilesX + tileX])
+                    object[] tileLocksCopy;
+                    int tilesXCopy, tilesYCopy;
+
+                    lock (TileLocksInitLock)
+                    {
+                        tileLocksCopy = TileLocks;
+                        tilesXCopy = TilesX;
+                        tilesYCopy = TilesY;
+                    }
+                    lock (tileLocksCopy[tileY * TilesX + tileX])
                     {
                         for (int y = startY; y <= endY; y++)
                         {
@@ -321,8 +338,22 @@ namespace SoftwareRenderer
         {
             if (window.RenderWidth <= 0 || window.RenderHeight <= 0) return;
 
-            float invWidth = 1f / (window.RenderWidth - 1);
-            float invHeight = 1f / (window.RenderHeight - 1);
+            // Tile initialization check (unchanged)
+            if (TileLocks == null || TilesX != (window.RenderWidth + TileSize - 1) / TileSize ||
+                TilesY != (window.RenderHeight + TileSize - 1) / TileSize)
+            {
+                InitializeTileLocks(window.RenderWidth, window.RenderHeight);
+            }
+
+            // Precompute these values once
+            int renderWidth = window.RenderWidth;
+            int renderHeight = window.RenderHeight;
+            float invWidth = 1f / (renderWidth - 1);
+            float invHeight = 1f / (renderHeight - 1);
+            float halfRenderWidth = renderWidth * 0.5f;
+            float halfRenderHeight = renderHeight * 0.5f;
+            float halfWidthPlusHalf = halfRenderWidth + 0.5f;
+            float halfHeightPlusHalf = halfRenderHeight + 0.5f;
 
             Vector2D<int>[] screenCoords = new Vector2D<int>[3];
             float[] depths = new float[3];
@@ -337,9 +368,10 @@ namespace SoftwareRenderer
                     outputs[i].ClipPosition.Z * invW
                 );
 
+                // Optimized screen coordinate calculation
                 screenCoords[i] = new Vector2D<int>(
-                    (int)MathF.Round((viewPos.X * 0.5f + 0.5f) * window.RenderWidth),
-                    (int)MathF.Round((-viewPos.Y * 0.5f + 0.5f) * window.RenderHeight)
+                    (int)MathF.Round(viewPos.X * halfRenderWidth + halfWidthPlusHalf),
+                    (int)MathF.Round(-viewPos.Y * halfRenderHeight + halfHeightPlusHalf)
                 );
 
                 depths[i] = viewPos.Z;
@@ -426,7 +458,16 @@ namespace SoftwareRenderer
                     int w1Row = a20 * (startX - p3.X) + b20 * (startY - p3.Y);
                     int w2Row = a01 * (startX - vector2D1.X) + b01 * (startY - vector2D1.Y);
 
-                    lock (tileLocks[tileY * TilesX + tileX])
+                    object[] tileLocksCopy;
+                    int tilesXCopy, tilesYCopy;
+
+                    lock (TileLocksInitLock)
+                    {
+                        tileLocksCopy = TileLocks;
+                        tilesXCopy = TilesX;
+                        tilesYCopy = TilesY;
+                    }
+                    lock (tileLocksCopy[tileY * TilesX + tileX])
                     {
                         for (int y = startY; y <= endY; y++)
                         {
@@ -505,41 +546,41 @@ namespace SoftwareRenderer
             float w2,
             bool interpolate = true)
         {
-            float invW0 = 1f / a.ClipPosition.W;
-            float invW1 = 1f / b.ClipPosition.W;
-            float invW2 = 1f / c.ClipPosition.W;
+            double invW0 = 1.0 / a.ClipPosition.W;
+            double invW1 = 1.0 / b.ClipPosition.W;
+            double invW2 = 1.0 / c.ClipPosition.W;
+            double w0Inv = w0 * invW0;
+            double w1Inv = w1 * invW1;
+            double w2Inv = w2 * invW2;
+            double oneOverW = w0Inv + w1Inv + w2Inv;
+            float w = (float)(1.0 / oneOverW);
 
-            float w0Inv = w0 * invW0;
-            float w1Inv = w1 * invW1;
-            float w2Inv = w2 * invW2;
+            float wa = (float)(w0Inv * w);
+            float wb = (float)(w1Inv * w);
+            float wc = (float)(w2Inv * w);
 
-            float oneOverW = w0Inv + w1Inv + w2Inv;
-            float w = 1f / oneOverW;
-
-            float wa = w0Inv * w;
-            float wb = w1Inv * w;
-            float wc = w2Inv * w;
-
-            Vector4 clipPos = (a.ClipPosition * w0Inv + b.ClipPosition * w1Inv + c.ClipPosition * w2Inv) * w;
-            Vector2 texCoord = (a.TexCoord * w0Inv + b.TexCoord * w1Inv + c.TexCoord * w2Inv) * w;
-            Vector2 screenCoords = (a.ScreenCoords * w0Inv + b.ScreenCoords * w1Inv + c.ScreenCoords * w2Inv) * w;
+            Vector4 clipPos = (a.ClipPosition * (float)w0Inv + b.ClipPosition * (float)w1Inv + c.ClipPosition * (float)w2Inv) * w;
+            Vector2 texCoord = (a.TexCoord * (float)w0Inv + b.TexCoord * (float)w1Inv + c.TexCoord * (float)(w2Inv)) * w;
+            Vector2 screenCoords = (a.ScreenCoords * (float)w0Inv + b.ScreenCoords * (float)w1Inv + c.ScreenCoords * (float)(w2Inv)) * w;
 
             Vector3 normal = interpolate
-                ? Vector3.Normalize((a.Normal * w0Inv + b.Normal * w1Inv + c.Normal * w2Inv) * w)
+                ? Vector3.Normalize((a.Normal * (float)w0Inv + b.Normal * (float)w1Inv + c.Normal * (float)w2Inv) * w)
                 : a.Normal;
 
             return new Shaders.VertexOutput
             {
                 ClipPosition = clipPos,
                 Color = interpolate
-                    ? (a.Color * w0Inv + b.Color * w1Inv + c.Color * w2Inv) * w
+                    ? (a.Color * (float)w0Inv + b.Color * (float)w1Inv + c.Color * (float)w2Inv) * w
                     : a.Color,
                 TexCoord = texCoord,
                 Normal = normal,
                 ScreenCoords = screenCoords,
                 Data = interpolate
-                    ? InterpolateData(a.Data, b.Data, c.Data, w0Inv, w1Inv, w2Inv, w)
-                    : a.Data
+                    ? InterpolateData(a.Data, b.Data, c.Data, (float)(w0Inv), (float)(w1Inv), (float)(w2Inv), w)
+                    : a.Data,
+                Interpolate = interpolate,
+                Barycentric = new Vector3(w0, w1, w2)
             };
         }
 
