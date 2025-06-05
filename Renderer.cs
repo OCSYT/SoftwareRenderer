@@ -15,6 +15,8 @@ namespace SoftwareRenderer
         public bool MouseLocked = true;
         private bool WasEscapePressed = false;
 
+        private float NearClip = 0.1f;
+        private float FarClip = 100f;
         private float FogStart = 1;
         private float FogEnd = 50;
         private Vector4 FogColor = new(0.5f, 0.6f, 1f, 1f);
@@ -107,7 +109,7 @@ namespace SoftwareRenderer
                     Vector3 rayOrigin = currentPos + offset;
 
                     if (Physics.Raycast(rayOrigin, direction, vertices, indices, modelMatrix,
-                        out float hitDistance, out _, out Vector3 normal, RaycastFaceMask.IgnoreBackfaces))
+                        out float hitDistance, out _, out Vector3 normal))
                     {
                         if (hitDistance * hitDistance < moveVector.LengthSquared() && hitDistance < nearestHitDistance)
                         {
@@ -130,9 +132,12 @@ namespace SoftwareRenderer
                 ? stopPos
                 : MoveWithSlide(stopPos, stopPos + projectedMove, radius, depth + 1);
         }
+        
 
+        private int RenderedModels;
         private void RenderE1M1(MainWindow window)
         {
+            RenderedModels = 0;
             if (E1M1Model == null)
             {
                 var result = Model.LoadModel("./Assets/e1m1/doom_E1M1.obj");
@@ -144,6 +149,9 @@ namespace SoftwareRenderer
 
             Parallel.ForEach(E1M1Model.Meshes, mesh =>
             {
+                if (!FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, modelMatrix, viewMatrix, ProjectionMatrix))
+                    return;
+
                 Texture texture = null;
 
                 if (mesh?.Material?.TexturePaths?.TryGetValue(TextureSlot.Diffuse, out var texturePath) == true)
@@ -151,19 +159,17 @@ namespace SoftwareRenderer
                     texture = CachedTextures.GetOrAdd(texturePath, SoftwareRenderer.Texture.LoadTexture);
                 }
 
-                if (FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, modelMatrix, viewMatrix, ProjectionMatrix))
-                {
-                    Rasterizer.RenderMesh(
-                        window,
-                        mesh.Vertices.ToArray(),
-                        mesh.Indices.ToArray(),
-                        modelMatrix,
-                        viewMatrix,
-                        ProjectionMatrix,
-                        VertexShader,
-                        input => FragmentShader(input, texture),
-                        Rasterizer.CullMode.Back);
-                }
+                Rasterizer.RenderMesh(
+                    window,
+                    mesh.Vertices.ToArray(),
+                    mesh.Indices.ToArray(),
+                    modelMatrix,
+                    viewMatrix,
+                    ProjectionMatrix,
+                    VertexShader,
+                    input => FragmentShader(input, texture),
+                    Rasterizer.CullMode.Back);
+                RenderedModels++;
             });
         }
 
@@ -306,7 +312,21 @@ namespace SoftwareRenderer
                         ImGui.SliderFloat("Move Speed", ref CameraObj.Speed, 0.1f, 50f);
                         ImGui.SliderFloat("Mouse Sensitivity", ref CameraObj.Sensitivity, 0.01f, 1f);
                         ImGui.SliderFloat("FOV", ref FOV, 1f, 179f);
+                        if (ImGui.InputFloat("Near Clip", ref NearClip, 0.1f, 1.0f, "%.3f"))
+                        {
+                            NearClip = Math.Clamp(NearClip, 0.01f, 1000f);
+                        }
 
+
+                        if (ImGui.InputFloat("Far Clip", ref FarClip, 0.1f, 1.0f, "%.3f"))
+                        {
+                            FarClip = Math.Clamp(FarClip, 0.01f, 1000f);
+                        }
+
+                        if (FarClip <= NearClip)
+                        {
+                            FarClip = NearClip + 0.01f;
+                        }
                         Vector3 frontVec = CameraObj.GetFront();
                         ImGui.Text($"Front: {frontVec.X:F2}, {frontVec.Y:F2}, {frontVec.Z:F2}");
                     }
@@ -347,6 +367,7 @@ namespace SoftwareRenderer
                         if (ImGui.CollapsingHeader("Scene Info", ImGuiTreeNodeFlags.DefaultOpen))
                         {
                             ImGui.Text($"Loaded Meshes: {E1M1Model?.Meshes?.Count ?? 0}");
+                            ImGui.Text($"Rendered Meshes: {RenderedModels}");
                             ImGui.Text($"Cached Textures: {CachedTextures.Count}");
                             ImGui.Text($"Runtime: {Time:F2}s");
                             ImGui.Text($"Window Size: {window.WindowWidth}x{window.WindowHeight}");
@@ -366,8 +387,8 @@ namespace SoftwareRenderer
                 ProjectionMatrix = Matrix4x4.CreatePerspectiveFieldOfView(
                     FOV * MathF.PI / 180,
                     (float)window.RenderWidth / window.RenderHeight,
-                    0.1f,
-                    100f);
+                    NearClip,
+                    FarClip);
 
                 Time += (float)DeltaTime;
 
