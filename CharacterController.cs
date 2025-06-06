@@ -4,19 +4,18 @@ namespace SoftwareRenderer
 {
     public class CharacterController
     {
-        public Vector3 Position { get; private set; }
+        public Vector3 Position { get; set; }
         public Vector3 Velocity { get; private set; }
         public bool IsGrounded { get; private set; }
 
-        private float Height = 0.5f;
-        private float Radius = 0.15f;
-        private float Mass = 80f;
-        private float GroundCheckDistance = 0.1f;
-        private float GroundFriction = 8f;
-        private float AirControl = 0.5f;
-        private float JumpForce = 3f;
-        private float MoveSpeed = 2f;
-        private float RunMultiplier = 2f;
+        public float Height = 0.5f;
+        public float Radius = 0.15f;
+        public float GroundCheckDistance = 0.1f;
+        public float GroundFriction = 8f;
+        public float AirControl = 1.25f;
+        public float JumpForce = 3f;
+        public float MoveSpeed = 2f;
+        public float RunMultiplier = 2f;
         private Vector3 Gravity = new Vector3(0, -9.81f, 0);
 
         // Accept collision meshes *and* their model matrices in parallel arrays
@@ -49,9 +48,9 @@ namespace SoftwareRenderer
             else
             {
                 Velocity = new Vector3(
-                    MathHelper.Lerp(Velocity.X, desiredVelocity.X, GroundFriction * deltaTime),
-                    Velocity.Y + desiredVelocity.Y * AirControl * deltaTime,
-                    MathHelper.Lerp(Velocity.Z, desiredVelocity.Z, GroundFriction * deltaTime)
+                    MathHelper.Lerp(Velocity.X, desiredVelocity.X * AirControl, GroundFriction * deltaTime),
+                    Velocity.Y + desiredVelocity.Y * deltaTime,
+                    MathHelper.Lerp(Velocity.Z, desiredVelocity.Z * AirControl, GroundFriction * deltaTime)
                 );
             }
 
@@ -65,8 +64,8 @@ namespace SoftwareRenderer
             Vector3 horizontalMovement = new Vector3(movement.X, 0, movement.Z);
             Vector3 verticalMovement = new Vector3(0, movement.Y, 0);
 
-            Position = MoveWithSlide(Position, Position + horizontalMovement, Radius, 0, CollisionModels, ModelMatrices);
-            Position = MoveWithSlide(Position, Position + verticalMovement, Radius, 0, CollisionModels, ModelMatrices);
+            Position = MoveWithSlide(Position, Position + horizontalMovement, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
+            Position = MoveWithSlide(Position, Position + verticalMovement, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
             IsGrounded = CheckGrounded(CollisionModels, ModelMatrices);
         }
 

@@ -225,99 +225,152 @@ namespace SoftwareRenderer
                     ImGui.SetNextWindowViewport(Viewport.ID);
 
                     ImGui.DockSpaceOverViewport(Viewport.ID, Viewport, ImGuiDockNodeFlags.PassthruCentralNode);
-                    ImGui.Begin("Renderer Controls", ImGuiWindowFlags.None);
-                    if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
-                    {
-                        ImGui.Text($"FPS: {(int)(1 / DeltaTime)}");
-                        ImGui.Text($"Frame Time: {DeltaTime * 1000:F2}ms");
-                    }
+                          ImGui.Begin("Renderer Controls", ImGuiWindowFlags.None);
+        
 
-                    if (ImGui.CollapsingHeader("Camera", ImGuiTreeNodeFlags.DefaultOpen))
-                    {
-                        ImGui.Text("Camera Position:");
-                        Vector3 camPos = CameraObj.Position;
-                        if (ImGui.DragFloat3("Position", ref camPos, 0.1f))
-                        {
-                            CameraObj.Position = camPos;
-                        }
+        if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.Text($"FPS: {(int)(1 / DeltaTime)}");
+            ImGui.Text($"Frame Time: {DeltaTime * 1000:F2}ms");
+            ImGui.Text($"Rendered Meshes: {RenderedModels}");
+            ImGui.Text($"Cached Textures: {CachedTextures.Count}");
+        }
+        if (ImGui.CollapsingHeader("Scene Info", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.Text($"Loaded Meshes: {E1M1Model?.Count ?? 0}");
+            ImGui.Text($"Runtime: {Time:F2}s");
+            ImGui.Text($"Window Size: {window.WindowWidth}x{window.WindowHeight}");
+            ImGui.Text($"Render Size: {window.RenderWidth}x{window.RenderHeight}");
+        }
 
-                        ImGui.Text("Rotation:");
-                        float Yaw = CameraObj.Yaw % 360;
-                        if (ImGui.DragFloat("Yaw (°)", ref Yaw, 0.5f))
-                        {
-                            CameraObj.Yaw = Yaw;
-                        }
 
-                        float Pitch = CameraObj.Pitch;
-                        if (ImGui.DragFloat("Pitch (°)", ref Pitch, 0.5f))
-                        {
-                            Pitch = Math.Clamp(Pitch, -89f, 89f);
-                            CameraObj.Pitch = Pitch;
-                        }
+        if (ImGui.CollapsingHeader("Camera", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.Text("Camera Position:");
+            Vector3 camPos = CameraObj.Position;
+            if (ImGui.DragFloat3("Position", ref camPos, 0.1f))
+            {
+                CameraObj.Position = camPos;
+                if (CharacterController != null)
+                    CharacterController.Position = camPos;
+            }
 
-                        ImGui.SliderFloat("Mouse Sensitivity", ref CameraObj.Sensitivity, 0.01f, 1f);
-                        ImGui.SliderFloat("FOV", ref FOV, 1f, 179f);
-                        if (ImGui.InputFloat("Near Clip", ref NearClip, 0.1f, 1.0f, "%.3f"))
-                        {
-                            NearClip = Math.Clamp(NearClip, 0.01f, 1000f);
-                        }
+            ImGui.Text("Rotation:");
+            float Yaw = CameraObj.Yaw % 360;
+            if (ImGui.DragFloat("Yaw (°)", ref Yaw, 0.5f))
+            {
+                CameraObj.Yaw = Yaw;
+            }
 
-                        if (ImGui.InputFloat("Far Clip", ref FarClip, 0.1f, 1.0f, "%.3f"))
-                        {
-                            FarClip = Math.Clamp(FarClip, 0.01f, 1000f);
-                        }
+            float Pitch = CameraObj.Pitch;
+            if (ImGui.DragFloat("Pitch (°)", ref Pitch, 0.5f))
+            {
+                Pitch = Math.Clamp(Pitch, -89f, 89f);
+                CameraObj.Pitch = Pitch;
+            }
 
-                        if (FarClip <= NearClip)
-                        {
-                            FarClip = NearClip + 0.01f;
-                        }
-                        Vector3 frontVec = CameraObj.GetFront();
-                        ImGui.Text($"Front: {frontVec.X:F2}, {frontVec.Y:F2}, {frontVec.Z:F2}");
-                    }
+            ImGui.SliderFloat("Mouse Sensitivity", ref CameraObj.Sensitivity, 0.01f, 1f);
+            ImGui.SliderFloat("FOV", ref FOV, 1f, 179f);
+            
+            if (ImGui.InputFloat("Near Clip", ref NearClip, 0.1f, 1.0f, "%.3f"))
+            {
+                NearClip = Math.Clamp(NearClip, 0.01f, 1000f);
+            }
 
-                    if (ImGui.CollapsingHeader("Rendering", ImGuiTreeNodeFlags.DefaultOpen))
-                    {
-                        ImGui.Text($"Render Scale: {(int)(window.RenderScale * 100)}%%");
-                        if (ImGui.SliderFloat("##RenderScale", ref window.RenderScale, 0.1f, 1f))
-                        {
-                            window.UpdateRenderScale(window.RenderScale);
-                        }
+            if (ImGui.InputFloat("Far Clip", ref FarClip, 0.1f, 1.0f, "%.3f"))
+            {
+                FarClip = Math.Clamp(FarClip, 0.01f, 1000f);
+            }
 
-                        ImGui.Text("Clear Color:");
-                        ImGui.ColorEdit3("Clear Color", ref ClearColor);
+            if (FarClip <= NearClip)
+            {
+                FarClip = NearClip + 0.01f;
+            }
+            
+            Vector3 frontVec = CameraObj.GetFront();
+            ImGui.Text($"Front: {frontVec.X:F2}, {frontVec.Y:F2}, {frontVec.Z:F2}");
+        }
 
-                        ImGui.Text("Debug Modes:");
-                        int debugMode = (int)Rasterizer.RenderDebugMode;
-                        ImGui.RadioButton("Normal", ref debugMode, (int)Rasterizer.DebugMode.None);
-                        ImGui.SameLine();
-                        ImGui.RadioButton("Wireframe", ref debugMode, (int)Rasterizer.DebugMode.Wireframe);
-                        Rasterizer.RenderDebugMode = (Rasterizer.DebugMode)debugMode;
 
-                        ImGui.Text("Fog Settings:");
-                        ImGui.SliderFloat("Fog Start", ref FogStart, 1f, 100f);
-                        ImGui.SliderFloat("Fog End", ref FogEnd, 10f, 500f);
-                        ImGui.ColorEdit4("Fog Color", ref FogColor);
+        if (CharacterController != null &&
+            ImGui.CollapsingHeader("Character Controller", ImGuiTreeNodeFlags.DefaultOpen))
+        {
 
-                        ImGui.Text("Light Settings:");
-                        if (ImGui.DragFloat3("Light Rotation", ref LightEulerDegrees, 0.5f))
-                        {
-                            LightDir = EulerToDirection(LightEulerDegrees);
-                        }
+            float moveSpeed = CharacterController.MoveSpeed;
+            if (ImGui.DragFloat("Move Speed", ref moveSpeed, 0.1f, 1f, 20f))
+                CharacterController.MoveSpeed = moveSpeed;
 
-                        ImGui.ColorEdit4("Light Color", ref LightColor);
+            float runMultiplier = CharacterController.RunMultiplier;
+            if (ImGui.DragFloat("Run Multiplier", ref runMultiplier, 0.1f, 1f, 3f))
+                CharacterController.RunMultiplier = runMultiplier;
 
-                        if (ImGui.CollapsingHeader("Scene Info", ImGuiTreeNodeFlags.DefaultOpen))
-                        {
-                            ImGui.Text($"Loaded Meshes: {E1M1Model?.Count ?? 0}");
-                            ImGui.Text($"Rendered Meshes: {RenderedModels}");
-                            ImGui.Text($"Cached Textures: {CachedTextures.Count}");
-                            ImGui.Text($"Runtime: {Time:F2}s");
-                            ImGui.Text($"Window Size: {window.WindowWidth}x{window.WindowHeight}");
-                            ImGui.Text($"Render Size: {window.RenderWidth}x{window.RenderHeight}");
-                        }
-                    }
+            float jumpForce = CharacterController.JumpForce;
+            if (ImGui.DragFloat("Jump Force", ref jumpForce, 0.1f, 1f, 15f))
+                CharacterController.JumpForce = jumpForce;
 
-                    ImGui.End();
+            float radius = CharacterController.Radius;
+            if (ImGui.DragFloat("Radius", ref radius, 0.01f, 0.1f, 1f))
+                CharacterController.Radius = radius;
+
+            float height = CharacterController.Height;
+            if (ImGui.DragFloat("Height", ref height, 0.1f, 0.5f, 3f))
+                CharacterController.Height = height;
+
+
+            float groundCheckDistance = CharacterController.GroundCheckDistance;
+            if (ImGui.DragFloat("Ground Check Distance", ref groundCheckDistance, 0.01f, 0.01f, 0.5f))
+                CharacterController.GroundCheckDistance = groundCheckDistance;
+
+
+            float groundFriction = CharacterController.GroundFriction;
+            if (ImGui.DragFloat("Ground Friction", ref groundFriction, 0.1f, 1f, 20f))
+                CharacterController.GroundFriction = groundFriction;
+
+            float airControl = CharacterController.AirControl;
+            if (ImGui.DragFloat("Air Control", ref airControl, 0.01f, 0f, 1f))
+                CharacterController.AirControl = airControl;
+
+
+            ImGui.Text(
+                $"Velocity: {CharacterController.Velocity.X:F2}, {CharacterController.Velocity.Y:F2}, {CharacterController.Velocity.Z:F2}");
+            ImGui.Text($"Is Grounded: {CharacterController.IsGrounded}");
+        }
+
+
+        if (ImGui.CollapsingHeader("Rendering", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.Text($"Render Scale: {(int)(window.RenderScale * 100)}%%");
+            if (ImGui.SliderFloat("##RenderScale", ref window.RenderScale, 0.1f, 1f))
+            {
+                window.UpdateRenderScale(window.RenderScale);
+            }
+
+            ImGui.Text("Clear Color:");
+            ImGui.ColorEdit3("Clear Color", ref ClearColor);
+
+            ImGui.Text("Debug Modes:");
+            int debugMode = (int)Rasterizer.RenderDebugMode;
+            ImGui.RadioButton("Normal", ref debugMode, (int)Rasterizer.DebugMode.None);
+            ImGui.SameLine();
+            ImGui.RadioButton("Wireframe", ref debugMode, (int)Rasterizer.DebugMode.Wireframe);
+            Rasterizer.RenderDebugMode = (Rasterizer.DebugMode)debugMode;
+
+            ImGui.Text("Fog Settings:");
+            ImGui.SliderFloat("Fog Start", ref FogStart, 1f, 100f);
+            ImGui.SliderFloat("Fog End", ref FogEnd, 10f, 500f);
+            ImGui.ColorEdit4("Fog Color", ref FogColor);
+
+            ImGui.Text("Light Settings:");
+            if (ImGui.DragFloat3("Light Rotation", ref LightEulerDegrees, 0.5f))
+            {
+                LightDir = EulerToDirection(LightEulerDegrees);
+            }
+
+            ImGui.ColorEdit4("Light Color", ref LightColor);
+        }
+
+
+        ImGui.End();
                     if (!LoadedLayout)
                     {
                         ImGui.LoadIniSettingsFromDisk("./Layouts/DefaultLayout.ini");
