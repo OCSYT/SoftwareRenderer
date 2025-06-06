@@ -4,25 +4,34 @@ namespace SoftwareRenderer
 {
     public class CharacterController
     {
+        private readonly object _checkPlaneLock = new();
+        private readonly object _moveWithSlideLock = new();
+        // Core Properties
         public Vector3 Position { get; set; }
         public Vector3 Velocity { get; private set; }
         public bool IsGrounded { get; private set; }
+        public bool IsCeiling { get; private set; }
 
-        public float Height = 0.5f;
-        public float Radius = 0.15f;
-        public float GroundCheckDistance = 0.1f;
-        public float GroundFriction = 8f;
-        public float AirControl = 1.25f;
-        public float JumpForce = 3f;
-        public float MoveSpeed = 2f;
-        public float RunMultiplier = 2f;
-        private Vector3 Gravity = new Vector3(0, -9.81f, 0);
+        // Capsule Parameters
+        public Vector3 Gravity { get; set; } = new Vector3(0, -14.0f, 0);
+        public float Height { get; set; } = 0.5f;
+        public float Radius { get; set; } = 0.15f; 
+        public float StepSize { get; set; } = 0.35f;
+        public float GroundCheckDistance { get; set; } = 0.05f;
+        public float MoveSpeed { get; set; } = 5.0f;
+        public float JumpForce { get; set; } = 4.8f;
+        public float GroundAcceleration { get; set; } = 3.5f;
+        public float AirAcceleration { get; set; } = 0.35f; 
+        public float MaxAirSpeed { get; set; } = 6.0f;
+        public float GroundFriction { get; set; } = 5.0f;
+        public float AirControl { get; set; } = 0.2f;
 
-        // Accept collision meshes *and* their model matrices in parallel arrays
-        private List<Mesh>[] CollisionModels;
-        private Matrix4x4[] ModelMatrices;
+        // Environment
+        private readonly List<Mesh>[] CollisionModels;
+        private readonly Matrix4x4[] ModelMatrices;
 
-        // Constructor now accepts model matrices too
+        private float TimeSinceLastGrounded { get; set; } = float.MaxValue;
+
         public CharacterController(Vector3 initialPosition, List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices)
         {
             Position = initialPosition;
@@ -33,48 +42,142 @@ namespace SoftwareRenderer
 
         public void Update(float deltaTime, Vector3 moveInput, bool jumpRequested, bool isRunning)
         {
-            Velocity += new Vector3(0, Gravity.Y * deltaTime, 0);
-            float speed = isRunning ? MoveSpeed * RunMultiplier : MoveSpeed;
-            Vector3 desiredVelocity = moveInput * speed;
+            Velocity += Gravity * deltaTime;
+
+            Vector3 wishDir = moveInput;
+            float wishSpeed = wishDir.Length();
+            if (wishSpeed > 1f) wishDir /= wishSpeed;
+            wishSpeed *= MoveSpeed;
 
             if (IsGrounded)
             {
-                Velocity = new Vector3(
-                    MathHelper.Lerp(Velocity.X, desiredVelocity.X, GroundFriction * deltaTime),
-                    Velocity.Y,
-                    MathHelper.Lerp(Velocity.Z, desiredVelocity.Z, GroundFriction * deltaTime)
-                );
+                ApplyFriction(deltaTime);
+                GroundAccelerate(wishDir, wishSpeed, deltaTime);
             }
             else
             {
-                Velocity = new Vector3(
-                    MathHelper.Lerp(Velocity.X, desiredVelocity.X * AirControl, GroundFriction * deltaTime),
-                    Velocity.Y + desiredVelocity.Y * deltaTime,
-                    MathHelper.Lerp(Velocity.Z, desiredVelocity.Z * AirControl, GroundFriction * deltaTime)
-                );
+                AirAccelerate(wishDir, wishSpeed, deltaTime);
+                AirControlFunc(wishDir, deltaTime);
+                ClampAirSpeed();
             }
 
-            if (jumpRequested && IsGrounded)
+            if (jumpRequested && (IsGrounded || TimeSinceLastGrounded < 0.1f))
             {
-                Velocity = Velocity with { Y = JumpForce };
+                Velocity = new Vector3(Velocity.X, JumpForce, Velocity.Z);
                 IsGrounded = false;
+                TimeSinceLastGrounded = float.MaxValue;
             }
 
             Vector3 movement = Velocity * deltaTime;
-            Vector3 horizontalMovement = new Vector3(movement.X, 0, movement.Z);
-            Vector3 verticalMovement = new Vector3(0, movement.Y, 0);
+            Vector3 horizontalMove = new(movement.X, 0, movement.Z);
+            Vector3 verticalMove = new(0, movement.Y, 0);
 
-            Position = MoveWithSlide(Position, Position + horizontalMovement, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
-            Position = MoveWithSlide(Position, Position + verticalMovement, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
-            IsGrounded = CheckGrounded(CollisionModels, ModelMatrices);
+            Position = MoveWithSlide(Position, Position + horizontalMove, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
+            Position = MoveWithSlide(Position, Position + verticalMove, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
+
+            bool wasGrounded = IsGrounded;
+            IsGrounded = CheckPlane(CollisionModels, ModelMatrices, -1, out var groundPoint);
+
+            if (IsGrounded && groundPoint != Vector3.NegativeInfinity)
+            {
+                Position = Position with { Y = groundPoint.Y + Height * 0.5f + GroundCheckDistance };
+                if (Velocity.Y < 0)
+                    Velocity = new Vector3(Velocity.X, 0, Velocity.Z);
+                TimeSinceLastGrounded = 0;
+            }
+            else
+            {
+                TimeSinceLastGrounded += deltaTime;
+            }
+
+            IsCeiling = CheckPlane(CollisionModels, ModelMatrices, 1, out var _);
+            if (IsCeiling && Velocity.Y > 0)
+            {
+                Velocity = new Vector3(Velocity.X, 0, Velocity.Z);
+            }
         }
 
-        private bool CheckGrounded(List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices)
+        private void ApplyFriction(float deltaTime)
+        {
+            Vector3 horizontalVel = new(Velocity.X, 0, Velocity.Z);
+            float speed = horizontalVel.Length();
+            if (speed < 0.1f)
+            {
+                Velocity = new Vector3(0, Velocity.Y, 0);
+                return;
+            }
+
+            float drop = speed * GroundFriction * deltaTime;
+            float newSpeed = MathF.Max(speed - drop, 0);
+            float scale = newSpeed / speed;
+            Velocity = new Vector3(Velocity.X * scale, Velocity.Y, Velocity.Z * scale);
+        }
+
+        private void GroundAccelerate(Vector3 wishDir, float wishSpeed, float deltaTime)
+        {
+            Vector3 horizontalVel = new(Velocity.X, 0, Velocity.Z);
+            float currentSpeed = Vector3.Dot(horizontalVel, wishDir);
+            float addSpeed = wishSpeed - currentSpeed;
+            if (addSpeed <= 0) return;
+
+            float accelSpeed = GroundAcceleration * wishSpeed * deltaTime;
+            accelSpeed = MathF.Min(accelSpeed, addSpeed);
+            Velocity += new Vector3(wishDir.X * accelSpeed, 0, wishDir.Z * accelSpeed);
+        }
+
+        private void AirAccelerate(Vector3 wishDir, float wishSpeed, float deltaTime)
+        {
+            Vector3 horizontalVel = new(Velocity.X, 0, Velocity.Z);
+            float currentSpeed = Vector3.Dot(horizontalVel, wishDir);
+            float addSpeed = wishSpeed - currentSpeed;
+            if (addSpeed <= 0) return;
+
+            float accelSpeed = AirAcceleration * wishSpeed * deltaTime;
+            accelSpeed = MathF.Min(accelSpeed, addSpeed);
+
+            Vector3 projectedVel = horizontalVel + wishDir * accelSpeed;
+            if (projectedVel.Length() > MaxAirSpeed)
+            {
+                projectedVel = Vector3.Normalize(projectedVel) * MaxAirSpeed;
+                Velocity = new Vector3(projectedVel.X, Velocity.Y, projectedVel.Z);
+            }
+            else
+            {
+                Velocity += new Vector3(wishDir.X * accelSpeed, 0, wishDir.Z * accelSpeed);
+            }
+        }
+
+        private void ClampAirSpeed()
+        {
+            Vector3 horizontalVel = new(Velocity.X, 0, Velocity.Z);
+            float speed = horizontalVel.Length();
+
+            if (speed > MaxAirSpeed)
+            {
+                horizontalVel = Vector3.Normalize(horizontalVel) * MaxAirSpeed;
+                Velocity = new Vector3(horizontalVel.X, Velocity.Y, horizontalVel.Z);
+            }
+        }
+
+        private void AirControlFunc(Vector3 wishDir, float deltaTime)
+        {
+            if (wishDir.LengthSquared() < 0.001f) return;
+
+            Vector3 horizontalVel = new(Velocity.X, 0, Velocity.Z);
+            float speed = horizontalVel.Length();
+            if (speed < 0.1f) return;
+
+            float k = AirControl * deltaTime;
+            Velocity += new Vector3(wishDir.X * k, 0, wishDir.Z * k);
+        }
+
+        private bool CheckPlane(List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices, float direction, out Vector3 point)
         {
             Vector3 rayStart = Position;
-            Vector3 rayEnd = rayStart + Vector3.UnitY * -(Height * 0.5f + GroundCheckDistance);
+            Vector3 rayEnd = rayStart + Vector3.UnitY * direction * (Height * 0.5f + GroundCheckDistance);
 
             bool hit = false;
+            Vector3 hitPoint = Vector3.NegativeInfinity;
 
             if (collisionModels != null && modelMatrices != null && collisionModels.Length == modelMatrices.Length)
             {
@@ -85,37 +188,42 @@ namespace SoftwareRenderer
 
                     Parallel.ForEach(model.ToArray(), mesh =>
                     {
-                        if (Physics.Raycast(rayStart, Vector3.Normalize(rayEnd - rayStart),
+                        Vector3 rayDir = rayEnd - rayStart;
+                        if (rayDir.LengthSquared() > 0 &&
+                            Physics.Raycast(rayStart, Vector3.Normalize(rayDir),
                                 mesh.Vertices.ToArray(), mesh.Indices.ToArray(), modelMatrix,
-                                out float hitDistance, out var hitPoint, out _))
+                                out float hitDistance, out var currentHitPoint, out _))
                         {
                             if (hitDistance <= (Height * 0.5f + GroundCheckDistance))
                             {
-                                Position = Position with
+                                lock (_checkPlaneLock)
                                 {
-                                    Y = hitPoint.Y + Height * 0.5f + GroundCheckDistance
-                                };
-                                Velocity = Velocity with { Y = 0 };
-                                hit = true;
+                                    if (!hit || hitDistance < Vector3.Distance(rayStart, hitPoint))
+                                    {
+                                        hitPoint = currentHitPoint;
+                                        hit = true;
+                                    }
+                                }
                             }
                         }
                     });
+
                     if (hit) break;
                 }
             }
 
+            point = hitPoint;
             return hit;
         }
-
-        private Vector3 MoveWithSlide(Vector3 currentPos, Vector3 desiredPos, float radius, int depth,
+        
+       private Vector3 MoveWithSlide(Vector3 currentPos, Vector3 desiredPos, float radius, int depth,
             List<Mesh>[] sceneModels = null, Matrix4x4[] modelMatrices = null)
         {
             const int MaxSlideAttempts = 3;
-            const float MinMoveDistance = 0.001f;
+            const float MinMoveDistance = 0.01f;
             const float SkinWidth = 0.01f;
 
-            if (depth >= MaxSlideAttempts || sceneModels == null || sceneModels.Length == 0
-                || modelMatrices == null || modelMatrices.Length != sceneModels.Length)
+            if (depth >= MaxSlideAttempts || sceneModels == null || modelMatrices == null || sceneModels.Length != modelMatrices.Length)
                 return currentPos;
 
             Vector3 moveVector = desiredPos - currentPos;
@@ -124,16 +232,14 @@ namespace SoftwareRenderer
             if (moveDistance < MinMoveDistance)
                 return currentPos;
 
-            Vector3 direction = moveVector / moveDistance;
+            Vector3 direction = moveDistance > 0 ? moveVector / moveDistance : Vector3.Zero;
             float nearestHitDistance = moveDistance;
             Vector3 hitNormal = Vector3.Zero;
             bool collisionDetected = false;
 
-            float capsuleHalfHeight = Height * 0.5f - radius;
+            float capsuleHalfHeight = Height * 0.5f;
             int verticalSteps = Math.Max(1, (int)(Height / (radius * 2)));
             int horizontalRays = Math.Max(3, (int)(2 * Math.PI * radius / 0.1f));
-
-            object hitLock = new object();
 
             for (int i = 0; i < sceneModels.Length; i++)
             {
@@ -147,13 +253,14 @@ namespace SoftwareRenderer
 
                     for (int vStep = 0; vStep <= verticalSteps; vStep++)
                     {
-                        float heightOffset = MathHelper.Lerp(-capsuleHalfHeight, capsuleHalfHeight,
-                            vStep / (float)verticalSteps);
+                        float bottomLimit = -capsuleHalfHeight + StepSize;
+                        float heightOffset = float.Lerp(bottomLimit, capsuleHalfHeight,
+                            vStep / (float)Math.Max(1, verticalSteps));
 
                         for (int hStep = 0; hStep < horizontalRays; hStep++)
                         {
                             float angle = 2 * MathF.PI * hStep / horizontalRays;
-                            Vector3 horizontalOffset = new Vector3(
+                            Vector3 horizontalOffset = new(
                                 radius * MathF.Cos(angle),
                                 0,
                                 radius * MathF.Sin(angle)
@@ -161,11 +268,11 @@ namespace SoftwareRenderer
 
                             Vector3 rayOrigin = currentPos + new Vector3(0, heightOffset, 0) + horizontalOffset;
 
-                            if (Physics.Raycast(rayOrigin, direction, vertices, indices, modelMatrix,
-                                    out float hitDistance, out _, out Vector3 normal) &&
-                                hitDistance < nearestHitDistance)
+                            if (direction.LengthSquared() > 0 &&
+                                Physics.Raycast(rayOrigin, direction, vertices, indices, modelMatrix,
+                                    out float hitDistance, out _, out Vector3 normal))
                             {
-                                lock (hitLock)
+                                lock (_moveWithSlideLock)
                                 {
                                     if (hitDistance < nearestHitDistance)
                                     {
