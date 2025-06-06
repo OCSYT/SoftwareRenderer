@@ -182,15 +182,22 @@ namespace SoftwareRenderer
             DepthTest depthTest = DepthTest.LessEqual,
             BlendMode blendMode = BlendMode.Alpha)
         {
+            if (window.RenderWidth <= 0 || window.RenderHeight <= 0) return;
+            
+            InitializeTileLocks(window.RenderWidth, window.RenderHeight);
 
             int triangleCount = indices.Length / 3;
+            var triangleData = new (int, int, int)[triangleCount];
+            
+            for (int i = 0; i < triangleCount; i++)
+            {
+                int baseIdx = i * 3;
+                triangleData[i] = (indices[baseIdx], indices[baseIdx + 1], indices[baseIdx + 2]);
+            }
 
             Parallel.For(0, triangleCount, Options, i =>
             {
-                int baseIdx = i * 3;
-                int i0 = indices[baseIdx];
-                int i1 = indices[baseIdx + 1];
-                int i2 = indices[baseIdx + 2];
+                var (i0, i1, i2) = triangleData[i];
 
                 var v0 = vertexShader(vertices[i0], model, view, projection);
                 var v1 = vertexShader(vertices[i1], model, view, projection);
@@ -219,7 +226,6 @@ namespace SoftwareRenderer
                 }
             });
         }
-        
 
         private static void DrawLine(
             MainWindow window,
@@ -276,6 +282,7 @@ namespace SoftwareRenderer
                         tilesXCopy = TilesX;
                         tilesYCopy = TilesY;
                     }
+                    
                     lock (tileLocksCopy[tileY * TilesX + tileX])
                     {
                         for (int y = startY; y <= endY; y++)
@@ -337,15 +344,14 @@ namespace SoftwareRenderer
             BlendMode blendMode)
         {
             if (window.RenderWidth <= 0 || window.RenderHeight <= 0) return;
-
-            // Tile initialization check (unchanged)
+            
+            
             if (TileLocks == null || TilesX != (window.RenderWidth + TileSize - 1) / TileSize ||
                 TilesY != (window.RenderHeight + TileSize - 1) / TileSize)
             {
                 InitializeTileLocks(window.RenderWidth, window.RenderHeight);
             }
-
-            // Precompute these values once
+            
             int renderWidth = window.RenderWidth;
             int renderHeight = window.RenderHeight;
             float invWidth = 1f / (renderWidth - 1);
@@ -367,8 +373,7 @@ namespace SoftwareRenderer
                     outputs[i].ClipPosition.Y * invW,
                     outputs[i].ClipPosition.Z * invW
                 );
-
-                // Optimized screen coordinate calculation
+                
                 screenCoords[i] = new Vector2D<int>(
                     (int)MathF.Round(viewPos.X * halfRenderWidth + halfWidthPlusHalf),
                     (int)MathF.Round(-viewPos.Y * halfRenderHeight + halfHeightPlusHalf)
@@ -427,17 +432,15 @@ namespace SoftwareRenderer
 
             var depthFunc = GetDepthTestFunction(depthTest);
             int tileSize = TileSize;
-            var tileLocks = TileLocks;
 
             int tileMinX = minX / tileSize;
             int tileMaxX = maxX / tileSize;
             int tileMinY = minY / tileSize;
             int tileMaxY = maxY / tileSize;
 
-            var vector2D = p1;
-            var vector2D1 = p0;
+            var vector2D = p0;
             var p3 = p2;
-
+            var vector2D1 = p1;
             Parallel.For(tileMinY, tileMaxY + 1, Options, tileY =>
             {
                 for (int tileX = tileMinX; tileX <= tileMaxX; tileX++)
@@ -454,9 +457,9 @@ namespace SoftwareRenderer
 
                     if (startX > endX || startY > endY) continue;
 
-                    int w0Row = a12 * (startX - vector2D.X) + b12 * (startY - vector2D.Y);
+                    int w0Row = a12 * (startX - vector2D1.X) + b12 * (startY - vector2D1.Y);
                     int w1Row = a20 * (startX - p3.X) + b20 * (startY - p3.Y);
-                    int w2Row = a01 * (startX - vector2D1.X) + b01 * (startY - vector2D1.Y);
+                    int w2Row = a01 * (startX - vector2D.X) + b01 * (startY - vector2D.Y);
 
                     object[] tileLocksCopy;
                     int tilesXCopy, tilesYCopy;
@@ -467,6 +470,7 @@ namespace SoftwareRenderer
                         tilesXCopy = TilesX;
                         tilesYCopy = TilesY;
                     }
+                    
                     lock (tileLocksCopy[tileY * TilesX + tileX])
                     {
                         for (int y = startY; y <= endY; y++)

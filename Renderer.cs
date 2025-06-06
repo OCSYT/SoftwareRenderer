@@ -9,12 +9,39 @@ using ImGuiNET;
 
 namespace SoftwareRenderer
 {
+
+    public class SceneModel
+    {
+        public List<Mesh> Meshes { get; init; }
+    }
+
+    public class Camera
+    {
+        public Vector3 Position = new Vector3(-10.610103f, 0.44594023f, -36.2275f);
+        public float Yaw = 90;
+        public float Pitch;
+        public float Sensitivity = 0.1f;
+
+        public Matrix4x4 GetViewMatrix() =>
+            Matrix4x4.CreateLookAt(Position, Position + GetFront(), Vector3.UnitY);
+
+        public Vector3 GetFront()
+        {
+            float yawRad = MathF.PI / 180f * Yaw;
+            float pitchRad = MathF.PI / 180f * Pitch;
+
+            return Vector3.Normalize(new Vector3(
+                MathF.Cos(yawRad) * MathF.Cos(pitchRad),
+                MathF.Sin(pitchRad),
+                MathF.Sin(yawRad) * MathF.Cos(pitchRad)));
+        }
+    }
+
     public class Renderer
     {
         public float Time;
         public bool MouseLocked = true;
         private bool WasEscapePressed = false;
-
         private float NearClip = 0.1f;
         private float FarClip = 100f;
         private float FogStart = 1;
@@ -26,40 +53,16 @@ namespace SoftwareRenderer
         private Vector3 ClearColor = Vector3.Zero;
         private float FOV = 90;
         private bool LoadedLayout = false;
-        private class Camera
-        {
-            public Vector3 Position = new Vector3(-10.610103f, 0.44594023f, -36.2275f);
-            public float Yaw = 90;
-            public float Pitch;
-            public float Speed = 10f;
-            public float Sensitivity = 0.1f;
-
-            public Matrix4x4 GetViewMatrix() =>
-                Matrix4x4.CreateLookAt(Position, Position + GetFront(), Vector3.UnitY);
-
-            public Vector3 GetFront()
-            {
-                float yawRad = MathF.PI / 180f * Yaw;
-                float pitchRad = MathF.PI / 180f * Pitch;
-
-                return Vector3.Normalize(new Vector3(
-                    MathF.Cos(yawRad) * MathF.Cos(pitchRad),
-                    MathF.Sin(pitchRad),
-                    MathF.Sin(yawRad) * MathF.Cos(pitchRad)));
-            }
-        }
-
+        private CharacterController CharacterController;
+        private bool IsRunning = false;
+        private bool JumpRequested = false;
         private static readonly Camera CameraObj = new();
         private static Vector2 LastMousePosition;
         private static bool FirstMouse = true;
         private Matrix4x4 ProjectionMatrix;
-        private SceneModel E1M1Model;
+        private List<Mesh> E1M1Model;
         private readonly ConcurrentDictionary<string, Texture> CachedTextures = new();
-
-        private class SceneModel
-        {
-            public List<Mesh> Meshes { get; init; }
-        }
+        private int RenderedModels;
 
         private static Vector3[] GetSphereOffsets(float radius)
         {
@@ -82,72 +85,20 @@ namespace SoftwareRenderer
 
         private static readonly Vector3[] SphereOffsets = GetSphereOffsets(0.15f);
 
-        private Vector3 MoveWithSlide(Vector3 currentPos, Vector3 desiredPos, float radius = 0.15f, int depth = 0)
-        {
-            const int MaxSlideAttempts = 3;
-            if (depth >= MaxSlideAttempts || E1M1Model == null)
-                return currentPos;
-
-            Vector3 moveVector = desiredPos - currentPos;
-            if (moveVector.LengthSquared() < 1e-6f)
-                return currentPos;
-
-            Vector3 direction = Vector3.Normalize(moveVector);
-            Vector3 hitNormal = Vector3.Zero;
-            float nearestHitDistance = float.MaxValue;
-            bool collisionDetected = false;
-
-            var modelMatrix = Matrix4x4.CreateScale(0.01f);
-
-            foreach (var mesh in E1M1Model.Meshes)
-            {
-                var vertices = mesh.Vertices.ToArray();
-                var indices = mesh.Indices.ToArray();
-
-                foreach (var offset in SphereOffsets)
-                {
-                    Vector3 rayOrigin = currentPos + offset;
-
-                    if (Physics.Raycast(rayOrigin, direction, vertices, indices, modelMatrix,
-                        out float hitDistance, out _, out Vector3 normal))
-                    {
-                        if (hitDistance * hitDistance < moveVector.LengthSquared() && hitDistance < nearestHitDistance)
-                        {
-                            nearestHitDistance = hitDistance;
-                            hitNormal = normal;
-                            collisionDetected = true;
-                        }
-                    }
-                }
-            }
-
-            if (!collisionDetected)
-                return desiredPos;
-
-            Vector3 stopPos = currentPos + direction * (nearestHitDistance - 0.01f);
-            Vector3 remainingMove = desiredPos - stopPos;
-            Vector3 projectedMove = remainingMove - Vector3.Dot(remainingMove, hitNormal) * hitNormal;
-
-            return projectedMove.LengthSquared() < 1e-4f
-                ? stopPos
-                : MoveWithSlide(stopPos, stopPos + projectedMove, radius, depth + 1);
-        }
-        
-
-        private int RenderedModels;
         private void RenderE1M1(MainWindow window)
         {
             RenderedModels = 0;
+            var modelMatrix = Matrix4x4.CreateScale(0.01f);
             if (E1M1Model == null)
             {
                 var result = Model.LoadModel("./Assets/e1m1/doom_E1M1.obj");
-                E1M1Model = new SceneModel { Meshes = result.Meshes };
+                E1M1Model = result.Meshes;
+                CharacterController = new CharacterController(CameraObj.Position, [E1M1Model], [modelMatrix]);
             }
-
-            var modelMatrix = Matrix4x4.CreateScale(0.01f);
+            
             var viewMatrix = CameraObj.GetViewMatrix();
 
-            Parallel.ForEach(E1M1Model.Meshes, mesh =>
+            Parallel.ForEach(E1M1Model.ToArray(), mesh =>
             {
                 if (!FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, modelMatrix, viewMatrix, ProjectionMatrix))
                     return;
@@ -244,7 +195,7 @@ namespace SoftwareRenderer
 
                 mouse.MouseMove += (_, pos) =>
                 {
-                    if(MouseLocked == false) return;
+                    if (!MouseLocked) return;
                     if (FirstMouse)
                     {
                         LastMousePosition = pos;
@@ -257,26 +208,23 @@ namespace SoftwareRenderer
                     CameraObj.Yaw += delta.X * CameraObj.Sensitivity;
                     CameraObj.Pitch = Math.Clamp(CameraObj.Pitch - delta.Y * CameraObj.Sensitivity, -89f, 89f);
                 };
-
             };
 
             Rasterizer.RenderDebugMode = Rasterizer.DebugMode.None;
 
-
             window.UpdateEvent += DeltaTime =>
             {
-                if (MouseLocked == false)
+                if (!MouseLocked)
                 {
                     var io = ImGui.GetIO();
                     io.ConfigFlags |= ImGuiConfigFlags.DockingEnable | ImGuiConfigFlags.ViewportsEnable | ImGuiConfigFlags.DpiEnableScaleViewports;
-                    
+
                     var Viewport = ImGui.GetMainViewport();
                     ImGui.SetNextWindowPos(Viewport.Pos);
                     ImGui.SetNextWindowSize(Viewport.Size);
                     ImGui.SetNextWindowViewport(Viewport.ID);
 
                     ImGui.DockSpaceOverViewport(Viewport.ID, Viewport, ImGuiDockNodeFlags.PassthruCentralNode);
-                    //ImGui.SaveIniSettingsToDisk("./Layouts/DefaultLayout.ini");
                     ImGui.Begin("Renderer Controls", ImGuiWindowFlags.None);
                     if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
                     {
@@ -287,13 +235,11 @@ namespace SoftwareRenderer
                     if (ImGui.CollapsingHeader("Camera", ImGuiTreeNodeFlags.DefaultOpen))
                     {
                         ImGui.Text("Camera Position:");
-
                         Vector3 camPos = CameraObj.Position;
                         if (ImGui.DragFloat3("Position", ref camPos, 0.1f))
                         {
                             CameraObj.Position = camPos;
                         }
-
 
                         ImGui.Text("Rotation:");
                         float Yaw = CameraObj.Yaw % 360;
@@ -309,14 +255,12 @@ namespace SoftwareRenderer
                             CameraObj.Pitch = Pitch;
                         }
 
-                        ImGui.SliderFloat("Move Speed", ref CameraObj.Speed, 0.1f, 50f);
                         ImGui.SliderFloat("Mouse Sensitivity", ref CameraObj.Sensitivity, 0.01f, 1f);
                         ImGui.SliderFloat("FOV", ref FOV, 1f, 179f);
                         if (ImGui.InputFloat("Near Clip", ref NearClip, 0.1f, 1.0f, "%.3f"))
                         {
                             NearClip = Math.Clamp(NearClip, 0.01f, 1000f);
                         }
-
 
                         if (ImGui.InputFloat("Far Clip", ref FarClip, 0.1f, 1.0f, "%.3f"))
                         {
@@ -330,7 +274,6 @@ namespace SoftwareRenderer
                         Vector3 frontVec = CameraObj.GetFront();
                         ImGui.Text($"Front: {frontVec.X:F2}, {frontVec.Y:F2}, {frontVec.Z:F2}");
                     }
-
 
                     if (ImGui.CollapsingHeader("Rendering", ImGuiTreeNodeFlags.DefaultOpen))
                     {
@@ -356,7 +299,6 @@ namespace SoftwareRenderer
                         ImGui.ColorEdit4("Fog Color", ref FogColor);
 
                         ImGui.Text("Light Settings:");
-
                         if (ImGui.DragFloat3("Light Rotation", ref LightEulerDegrees, 0.5f))
                         {
                             LightDir = EulerToDirection(LightEulerDegrees);
@@ -366,7 +308,7 @@ namespace SoftwareRenderer
 
                         if (ImGui.CollapsingHeader("Scene Info", ImGuiTreeNodeFlags.DefaultOpen))
                         {
-                            ImGui.Text($"Loaded Meshes: {E1M1Model?.Meshes?.Count ?? 0}");
+                            ImGui.Text($"Loaded Meshes: {E1M1Model?.Count ?? 0}");
                             ImGui.Text($"Rendered Meshes: {RenderedModels}");
                             ImGui.Text($"Cached Textures: {CachedTextures.Count}");
                             ImGui.Text($"Runtime: {Time:F2}s");
@@ -379,9 +321,8 @@ namespace SoftwareRenderer
                     if (!LoadedLayout)
                     {
                         ImGui.LoadIniSettingsFromDisk("./Layouts/DefaultLayout.ini");
-                        LoadedLayout = true;    
+                        LoadedLayout = true;
                     }
-
                 }
 
                 ProjectionMatrix = Matrix4x4.CreatePerspectiveFieldOfView(
@@ -392,27 +333,38 @@ namespace SoftwareRenderer
 
                 Time += (float)DeltaTime;
 
-                Vector3 desiredPosition = CameraObj.Position;
-                Vector3 front = CameraObj.GetFront();
-                Vector3 right = Vector3.Normalize(Vector3.Cross(front, Vector3.UnitY));
-                float moveStep = CameraObj.Speed * (float)DeltaTime;
+                if (CharacterController != null)
+                {
+                    Vector3 moveInput = Vector3.Zero;
+                    Vector3 front = CameraObj.GetFront();
+                    Vector3 right = Vector3.Normalize(Vector3.Cross(front, Vector3.UnitY));
 
-                if (keyboard.IsKeyPressed(Key.W)) desiredPosition += front * moveStep;
-                if (keyboard.IsKeyPressed(Key.S)) desiredPosition -= front * moveStep;
-                if (keyboard.IsKeyPressed(Key.A)) desiredPosition -= right * moveStep;
-                if (keyboard.IsKeyPressed(Key.D)) desiredPosition += right * moveStep;
+                    front.Y = 0;
+                    front = Vector3.Normalize(front);
+                    right.Y = 0;
+                    right = Vector3.Normalize(right);
+
+                    if (keyboard.IsKeyPressed(Key.W)) moveInput += front;
+                    if (keyboard.IsKeyPressed(Key.S)) moveInput -= front;
+                    if (keyboard.IsKeyPressed(Key.A)) moveInput -= right;
+                    if (keyboard.IsKeyPressed(Key.D)) moveInput += right;
+
+                    IsRunning = keyboard.IsKeyPressed(Key.ShiftLeft);
+                    JumpRequested = keyboard.IsKeyPressed(Key.Space);
+
+                    CharacterController.Update((float)DeltaTime, moveInput, JumpRequested, IsRunning);
+
+                    CameraObj.Position = CharacterController.Position;
+                }
+
                 bool isEscapePressed = keyboard.IsKeyPressed(Key.Escape);
-
                 if (isEscapePressed && !WasEscapePressed)
                 {
                     MouseLocked = !MouseLocked;
                     mouse.Cursor.CursorMode = MouseLocked ? CursorMode.Disabled : CursorMode.Normal;
                     FirstMouse = true;
                 }
-
                 WasEscapePressed = isEscapePressed;
-
-                CameraObj.Position = MoveWithSlide(CameraObj.Position, desiredPosition);
 
                 window.ClearDepthBuffer();
                 window.ClearColorBuffer(new Vector4(ClearColor.X, ClearColor.Y, ClearColor.Z, 1f));
@@ -421,6 +373,14 @@ namespace SoftwareRenderer
             };
 
             window.Run();
+        }
+    }
+
+    public static class MathHelper
+    {
+        public static float Lerp(float a, float b, float t)
+        {
+            return a + (b - a) * Math.Clamp(t, 0, 1);
         }
     }
 }
