@@ -41,7 +41,8 @@ public static class Physics
             Vector3 v1 = Vector3.Transform(vertices[i1].Position, model);
             Vector3 v2 = Vector3.Transform(vertices[i2].Position, model);
 
-            if (RayIntersectsTriangle(rayOrigin, rayDirection, v0, v1, v2, out float distance, out Vector3 bary, faceMask))
+            if (RayIntersectsTriangle(rayOrigin, rayDirection, v0, v1, v2, out float distance, out Vector3 bary,
+                    faceMask))
             {
                 if (distance < hitDistance)
                 {

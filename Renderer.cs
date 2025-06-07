@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Silk.NET.Input;
 using Silk.NET.OpenGL.Extensions.ImGui;
@@ -9,15 +10,14 @@ using ImGuiNET;
 
 namespace SoftwareRenderer
 {
-
-    public class SceneModel
-    {
-        public List<Mesh> Meshes { get; init; }
-    }
-
     public class Renderer
     {
-        public float Time;
+        public class SceneModel
+        {
+            public List<Mesh> Meshes { get; init; }
+        }
+        
+        private float Time;
         private Matrix4x4 ModelMatrix = Matrix4x4.CreateScale(0.01f);
         public bool MouseLocked = true;
         private bool WasEscapePressed = false;
@@ -42,33 +42,15 @@ namespace SoftwareRenderer
         private List<Mesh> E1M1Model;
         private readonly ConcurrentDictionary<string, Texture> CachedTextures = new();
         private int RenderedModels;
+        
 
-        private static Vector3[] GetSphereOffsets(float radius)
-        {
-            List<Vector3> offsets = new(25) { Vector3.Zero };
-            Vector3[] directions =
-            {
-                new(1, 0, 0), new(-1, 0, 0), new(0, 1, 0), new(0, -1, 0), new(0, 0, 1), new(0, 0, -1),
-                new(1, 1, 0), new(-1, 1, 0), new(1, -1, 0), new(-1, -1, 0),
-                new(1, 0, 1), new(-1, 0, 1), new(1, 0, -1), new(-1, 0, -1),
-                new(0, 1, 1), new(0, -1, 1), new(0, 1, -1), new(0, -1, -1),
-                new(1, 1, 1), new(-1, -1, -1), new(-1, 1, 1), new(1, -1, -1),
-                new(1, -1, 1), new(-1, 1, -1)
-            };
-
-            foreach (var dir in directions)
-                offsets.Add(Vector3.Normalize(dir) * radius);
-
-            return offsets.ToArray();
-        }
-
-        private static readonly Vector3[] SphereOffsets = GetSphereOffsets(0.15f);
-
-        void InitPlayer()
+        private void InitPlayer()
         {
             CharacterController = new CharacterController(new Vector3(-10.610103f, 0.44594023f, -36.2275f), [E1M1Model], [ModelMatrix]);
             CameraObj.Rotation = Quaternion.CreateFromYawPitchRoll((float)(180 * (Math.PI / 180)), 0, 0);
         }
+
+
         private void RenderE1M1(MainWindow window)
         {
             RenderedModels = 0;
@@ -81,7 +63,9 @@ namespace SoftwareRenderer
 
             var viewMatrix = CameraObj.GetViewMatrix();
 
-            Parallel.ForEach(E1M1Model.ToArray(), mesh =>
+            object renderedModelsLock = new();
+
+            Parallel.ForEach(E1M1Model, mesh =>
             {
                 if (!FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, ModelMatrix, viewMatrix, ProjectionMatrix))
                     return;
@@ -103,7 +87,11 @@ namespace SoftwareRenderer
                     VertexShader,
                     input => FragmentShader(input, texture),
                     Rasterizer.CullMode.Back);
-                RenderedModels++;
+
+                lock (renderedModelsLock)
+                {
+                    RenderedModels++;
+                }
             });
         }
 
@@ -122,7 +110,6 @@ namespace SoftwareRenderer
                 Data = { ["WorldNormal"] = worldNormal },
                 TexCoord = vertex.TexCoord,
                 Color = vertex.Color,
-                Normal = vertex.Normal,
                 Interpolate = true
             };
         }
@@ -146,13 +133,7 @@ namespace SoftwareRenderer
         private static Vector3 EulerToDirection(Vector3 eulerDegrees)
         {
             Vector3 radians = eulerDegrees * (MathF.PI / 180f);
-
-            Matrix4x4 rotation = Matrix4x4.CreateFromYawPitchRoll(
-                radians.Y,
-                radians.X,
-                radians.Z
-            );
-
+            Matrix4x4 rotation = Matrix4x4.CreateFromYawPitchRoll(radians.Y, radians.X, radians.Z);
             Vector3 forward = -Vector3.UnitZ;
             Vector3 direction = Vector3.Transform(forward, rotation);
             return Vector3.Normalize(direction);
@@ -175,7 +156,7 @@ namespace SoftwareRenderer
                 keyboard = inputContext.Keyboards[0];
                 mouse = inputContext.Mice[0];
                 mouse.Cursor.CursorMode = CursorMode.Disabled;
-                
+
                 mouse.MouseMove += (_, pos) =>
                 {
                     if (!MouseLocked) return;
@@ -188,14 +169,12 @@ namespace SoftwareRenderer
 
                     var delta = pos - LastMousePosition;
                     LastMousePosition = pos;
-                    
-                    Vector3 euler = CameraObj.GetEulerAngles();
-                    
+
+                    var euler = CameraObj.GetEulerAngles();
                     euler.Y -= delta.X * CameraObj.Sensitivity;
                     euler.X -= delta.Y * CameraObj.Sensitivity;
-                    
                     euler.X = Math.Clamp(euler.X, -89f, 89f);
-                    
+
                     CameraObj.Rotation = Quaternion.CreateFromYawPitchRoll(
                         euler.Y * (MathF.PI / 180f),
                         euler.X * (MathF.PI / 180f),
@@ -206,7 +185,9 @@ namespace SoftwareRenderer
             Rasterizer.RenderDebugMode = Rasterizer.DebugMode.None;
 
             window.UpdateEvent += DeltaTime =>
-            {
+            { 
+                
+
                 if (!MouseLocked)
                 {
                     var io = ImGui.GetIO();
@@ -220,7 +201,6 @@ namespace SoftwareRenderer
 
                     ImGui.DockSpaceOverViewport(Viewport.ID, Viewport, ImGuiDockNodeFlags.PassthruCentralNode);
                     ImGui.Begin("Renderer Controls", ImGuiWindowFlags.None);
-
 
                     if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
                     {
@@ -238,7 +218,6 @@ namespace SoftwareRenderer
                         ImGui.Text($"Render Size: {window.RenderWidth}x{window.RenderHeight}");
                     }
 
-
                     if (ImGui.CollapsingHeader("Camera", ImGuiTreeNodeFlags.DefaultOpen))
                     {
                         ImGui.Text("Camera Position:");
@@ -251,15 +230,10 @@ namespace SoftwareRenderer
                         }
 
                         ImGui.Text("Rotation:");
-
-                        // Get Euler angles in degrees from camera
                         Vector3 eulerDegrees = CameraObj.GetEulerAngles();
-
-                        // ImGui drag floats for pitch, yaw, roll
                         float pitch = eulerDegrees.X;
                         float yaw = eulerDegrees.Y;
                         float roll = eulerDegrees.Z;
-
                         bool updated = false;
                         if (ImGui.DragFloat("Pitch (°)", ref pitch, 0.5f))
                         {
@@ -275,32 +249,24 @@ namespace SoftwareRenderer
                         {
                             updated = true;
                         }
-
                         if (updated)
                         {
-                            // Update rotation quaternion from Euler angles (convert degrees to radians)
                             Quaternion newRotation = Quaternion.CreateFromYawPitchRoll(
-                                 yaw * (MathF.PI / 180f),
-                            pitch * (MathF.PI / 180f),
-                             roll * (MathF.PI / 180f));
+                                yaw * (MathF.PI / 180f),
+                                pitch * (MathF.PI / 180f),
+                                roll * (MathF.PI / 180f));
                             CameraObj.Rotation = newRotation;
                         }
 
                         ImGui.SliderFloat("Mouse Sensitivity", ref CameraObj.Sensitivity, 0.01f, 1f);
                         ImGui.SliderFloat("FOV", ref FOV, 1f, 179f);
-
-                        // ... (rest unchanged)
-
                         Vector3 frontVec = CameraObj.GetFront();
                         ImGui.Text($"Front: {frontVec.X:F2}, {frontVec.Y:F2}, {frontVec.Z:F2}");
                     }
 
-
-
                     if (CharacterController != null &&
                         ImGui.CollapsingHeader("Character Controller", ImGuiTreeNodeFlags.DefaultOpen))
                     {
-
                         float moveSpeed = CharacterController.MoveSpeed;
                         if (ImGui.DragFloat("Move Speed", ref moveSpeed, 0.1f, 1f, 20f))
                             CharacterController.MoveSpeed = moveSpeed;
@@ -308,7 +274,6 @@ namespace SoftwareRenderer
                         float maxAirSpeed = CharacterController.MaxAirSpeed;
                         if (ImGui.DragFloat("Max Air Speed", ref maxAirSpeed, 0.1f, 1f, 20f))
                             CharacterController.MaxAirSpeed = maxAirSpeed;
-                        
 
                         float jumpForce = CharacterController.JumpForce;
                         if (ImGui.DragFloat("Jump Force", ref jumpForce, 0.1f, 1f, 20f))
@@ -321,16 +286,15 @@ namespace SoftwareRenderer
                         float height = CharacterController.Height;
                         if (ImGui.DragFloat("Height", ref height, 0.1f, 0.5f, 3f))
                             CharacterController.Height = height;
-                        
+
                         float groundaccel = CharacterController.GroundAcceleration;
                         if (ImGui.DragFloat("Ground Acceleration", ref groundaccel, 0.1f, 1f, 20f))
                             CharacterController.GroundAcceleration = groundaccel;
-                        
+
                         float airaccel = CharacterController.AirAcceleration;
                         if (ImGui.DragFloat("Air Acceleration", ref airaccel, 0.1f, 1f, 20f))
                             CharacterController.AirAcceleration = airaccel;
-                        
-                        
+
                         float groundFriction = CharacterController.GroundFriction;
                         if (ImGui.DragFloat("Ground Friction", ref groundFriction, 0.1f, 1f, 20f))
                             CharacterController.GroundFriction = groundFriction;
@@ -338,27 +302,22 @@ namespace SoftwareRenderer
                         float airControl = CharacterController.AirControl;
                         if (ImGui.DragFloat("Air Control", ref airControl, 0.01f, 0f, 1f))
                             CharacterController.AirControl = airControl;
-                        
+
                         float stepSize = CharacterController.StepSize;
                         if (ImGui.DragFloat("Step Size", ref stepSize, 0.1f, 0.5f, 3f))
                             CharacterController.StepSize = stepSize;
 
-
                         float groundCheckDistance = CharacterController.GroundCheckDistance;
                         if (ImGui.DragFloat("Ground Check Distance", ref groundCheckDistance, 0.01f, 0.01f, 0.5f))
                             CharacterController.GroundCheckDistance = groundCheckDistance;
-                        
+
                         Vector3 gravity = CharacterController.Gravity;
                         if (ImGui.DragFloat3("Gravity", ref gravity, 0.1f, -20f, 20f))
                             CharacterController.Gravity = gravity;
-                        
 
-
-                        ImGui.Text(
-                            $"Velocity: {CharacterController.Velocity.X:F2}, {CharacterController.Velocity.Y:F2}, {CharacterController.Velocity.Z:F2}");
+                        ImGui.Text($"Velocity: {CharacterController.Velocity.X:F2}, {CharacterController.Velocity.Y:F2}, {CharacterController.Velocity.Z:F2}");
                         ImGui.Text($"Is Grounded: {CharacterController.IsGrounded}");
                     }
-
 
                     if (ImGui.CollapsingHeader("Rendering", ImGuiTreeNodeFlags.DefaultOpen))
                     {
@@ -388,10 +347,8 @@ namespace SoftwareRenderer
                         {
                             LightDir = EulerToDirection(LightEulerDegrees);
                         }
-
                         ImGui.ColorEdit4("Light Color", ref LightColor);
                     }
-
 
                     ImGui.End();
                     if (!LoadedLayout)
@@ -448,7 +405,7 @@ namespace SoftwareRenderer
                 RenderE1M1(window);
                 window.RenderFrame();
             };
-
+            
             window.Run();
         }
     }

@@ -44,21 +44,6 @@ namespace SoftwareRenderer
                 Interpolate = true;
                 Barycentric = default;
             }
-
-            public VertexOutput Clone()
-            {
-                return new VertexOutput
-                {
-                    ClipPosition = this.ClipPosition,
-                    Color = this.Color,
-                    TexCoord = this.TexCoord,
-                    Normal = this.Normal,
-                    Data = this.Data != null ? new Dictionary<string, object>(this.Data) : null,
-                    ScreenCoords = this.ScreenCoords,
-                    Interpolate = this.Interpolate,
-                    Barycentric = this.Barycentric,
-                };
-            }
         }
 
         public static VertexOutput Lerp(VertexOutput a, VertexOutput b, float t, bool interpolate)

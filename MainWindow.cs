@@ -35,6 +35,8 @@ namespace SoftwareRenderer
 
         public delegate void StartEventHandler();
         public event StartEventHandler? StartEvent;
+        public delegate void CloseEventHandler();
+        public event CloseEventHandler? CloseEvent;
         public delegate void UpdateEventHandler(double DeltaTime);
         public event UpdateEventHandler? UpdateEvent;
 
@@ -334,6 +336,7 @@ namespace SoftwareRenderer
             Gl.DeleteBuffer(VboHandle);
             Gl.DeleteVertexArray(VaoHandle);
             Gl.DeleteProgram(ShaderProgram);
+            CloseEvent?.Invoke();
         }
 
         private int GetIndex(int x, int y) => y * RenderWidth + x;
