@@ -41,7 +41,7 @@ namespace SoftwareRenderer
             _modelMatrices = modelMatrices;
         }
 
-        public void Update(float deltaTime, Vector3 moveInput, bool jumpRequested, bool isRunning)
+        public void Update(float deltaTime, Vector3 moveInput, bool jumpRequested)
         {
             Velocity += Gravity * deltaTime;
 
@@ -73,7 +73,7 @@ namespace SoftwareRenderer
             Vector3 moveY = new(0, movement.Y, 0);
 
             Position = MoveWithSlide(Position, Position + moveXZ, Radius + 0.001f, 0, _collisionModels, _modelMatrices);
-            Position += moveY;
+            Position = MoveWithSlide(Position, Position + moveY, Radius + 0.001f, 0, _collisionModels, _modelMatrices);
 
             IsGrounded = CheckPlane(_collisionModels, _modelMatrices, -1, out var groundPoint);
 
@@ -216,7 +216,7 @@ namespace SoftwareRenderer
             List<Mesh>[] sceneModels = null, Matrix4x4[] modelMatrices = null)
         {
             const int MaxSlideAttempts = 3;
-            const float MinMoveDistance = 0.01f;
+            const float MinMoveDistance = 0.001f;
             const float SkinWidth = 0.01f;
 
             if (depth >= MaxSlideAttempts || sceneModels == null || modelMatrices == null || sceneModels.Length != modelMatrices.Length)

@@ -16,7 +16,7 @@ namespace SoftwareRenderer
         {
             public List<Mesh> Meshes { get; init; }
         }
-        
+
         private float Time;
         private Matrix4x4 ModelMatrix = Matrix4x4.CreateScale(0.01f);
         public bool MouseLocked = true;
@@ -42,14 +42,129 @@ namespace SoftwareRenderer
         private List<Mesh> E1M1Model;
         private readonly ConcurrentDictionary<string, Texture> CachedTextures = new();
         private int RenderedModels;
-        
+
+        private Mesh PlayerCubeModel;
+
+        private void InitPlayerCubeModel()
+        {
+            var vertices = new List<Shaders.VertexInput>
+            {
+                // Back face (Z = -0.5, normal pointing back)
+                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 0), -Vector3.UnitZ,
+                    Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, -0.5f), new Vector2(1, 0), -Vector3.UnitZ,
+                    Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, -0.5f), new Vector2(1, 1), -Vector3.UnitZ, Vector4.One),
+                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, -0.5f), new Vector2(0, 1), -Vector3.UnitZ,
+                    Vector4.One),
+
+                // Front face (Z = 0.5, normal pointing forward)
+                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, 0.5f), new Vector2(0, 0), Vector3.UnitZ, Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, 0.5f), new Vector2(1, 0), Vector3.UnitZ, Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, 0.5f), new Vector2(1, 1), Vector3.UnitZ, Vector4.One),
+                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, 0.5f), new Vector2(0, 1), Vector3.UnitZ, Vector4.One),
+
+                // Top face (Y = 0.5, normal pointing up)
+                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, -0.5f), new Vector2(0, 0), Vector3.UnitY, Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, -0.5f), new Vector2(1, 0), Vector3.UnitY, Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, 0.5f), new Vector2(1, 1), Vector3.UnitY, Vector4.One),
+                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, 0.5f), new Vector2(0, 1), Vector3.UnitY, Vector4.One),
+
+                // Bottom face (Y = -0.5, normal pointing down)
+                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 0), -Vector3.UnitY,
+                    Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, -0.5f), new Vector2(1, 0), -Vector3.UnitY,
+                    Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, 0.5f), new Vector2(1, 1), -Vector3.UnitY, Vector4.One),
+                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, 0.5f), new Vector2(0, 1), -Vector3.UnitY,
+                    Vector4.One),
+
+                // Right face (X = 0.5, normal pointing right)
+                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, -0.5f), new Vector2(0, 0), Vector3.UnitX, Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, -0.5f), new Vector2(1, 0), Vector3.UnitX, Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, 0.5f), new Vector2(1, 1), Vector3.UnitX, Vector4.One),
+                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, 0.5f), new Vector2(0, 1), Vector3.UnitX, Vector4.One),
+
+                // Left face (X = -0.5, normal pointing left)
+                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 0), -Vector3.UnitX,
+                    Vector4.One),
+                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, -0.5f), new Vector2(1, 0), -Vector3.UnitX,
+                    Vector4.One),
+                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, 0.5f), new Vector2(1, 1), -Vector3.UnitX, Vector4.One),
+                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, 0.5f), new Vector2(0, 1), -Vector3.UnitX,
+                    Vector4.One),
+            };
+
+            var indices = new List<int>
+            {
+                // Back face (normal -Z) — clockwise winding from outside view
+                0, 2, 1, 2, 0, 3,
+
+                // Front face (normal +Z) — counter-clockwise winding
+                4, 5, 6, 6, 7, 4,
+
+                // Top face (normal +Y) — should be clockwise (flip winding)
+                8, 10, 9, 10, 8, 11,
+
+                // Bottom face (normal -Y) — should be counter-clockwise (flip winding)
+                12, 13, 14, 14, 15, 12,
+
+                // Right face (normal +X) — counter-clockwise winding
+                16, 17, 18, 18, 19, 16,
+
+                // Left face (normal -X) — clockwise winding
+                20, 22, 21, 22, 20, 23
+            };
+
+            var mesh = new Mesh(vertices, indices);
+            BoundingSphere sphere = FrustumCuller.CalculateBoundingSphere(vertices.ToArray());
+            mesh.SphereBounds = sphere;
+            PlayerCubeModel = (mesh);
+        }
+
+        private void RenderConnectedPlayers(MainWindow window, Matrix4x4 viewMatrix)
+        {
+            if (PlayerCubeModel == null)
+            {
+                InitPlayerCubeModel();
+            }
+
+            if (PlayerCubeModel == null || CharacterController == null) return;
+
+            foreach (var Player in Players)
+            {
+                Matrix4x4 PlayerModelMatrix =
+                    Matrix4x4.CreateScale(CharacterController.Radius, CharacterController.Height,
+                        CharacterController.Radius) *
+                    Matrix4x4.CreateFromQuaternion(Player.Rotation) *
+                    Matrix4x4.CreateTranslation(Player.Position);
+
+
+
+                if (!FrustumCuller.IsSphereInFrustum(PlayerCubeModel.SphereBounds, PlayerModelMatrix, viewMatrix,
+                        ProjectionMatrix))
+                    continue;
+
+                Rasterizer.RenderMesh(
+                    window,
+                    PlayerCubeModel.Vertices.ToArray(),
+                    PlayerCubeModel.Indices.ToArray(),
+                    PlayerModelMatrix,
+                    viewMatrix,
+                    ProjectionMatrix,
+                    VertexShader,
+                    input => FragmentShader(input, null), // no texture for simple cube
+                    Rasterizer.CullMode.Back);
+
+            }
+        }
 
         private void InitPlayer()
         {
-            CharacterController = new CharacterController(new Vector3(-10.610103f, 0.44594023f, -36.2275f), [E1M1Model], [ModelMatrix]);
+            CharacterController = new CharacterController(new Vector3(-10.610103f, 0.44594023f, -36.2275f), [E1M1Model],
+                [ModelMatrix]);
             CameraObj.Rotation = Quaternion.CreateFromYawPitchRoll((float)(180 * (Math.PI / 180)), 0, 0);
         }
-
 
         private void RenderE1M1(MainWindow window)
         {
@@ -130,6 +245,151 @@ namespace SoftwareRenderer
             return new Vector4(finalColor.X, finalColor.Y, finalColor.Z, baseColor.W);
         }
 
+        private void RenderPlayerNametags(MainWindow window, Matrix4x4 viewMatrix, Matrix4x4 projectionMatrix)
+        {
+            if (Players.Count == 0) return;
+
+            Matrix4x4 viewProjection = viewMatrix * projectionMatrix;
+
+            foreach (var player in Players)
+            {
+                Vector3 headPosition = player.Position + new Vector3(0, CharacterController.Height, 0);
+                Vector4 worldPos = new Vector4(headPosition, 1.0f);
+                Vector4 clipPos = Vector4.Transform(worldPos, viewProjection);
+
+                if (clipPos.W <= 0.001f) continue;
+
+                Vector3 ndc = new Vector3(clipPos.X, clipPos.Y, clipPos.Z) / clipPos.W;
+
+                if (ndc.Z < 0 || ndc.Z > 1) continue;
+
+                Vector2 screenPos = new Vector2(
+                    (ndc.X + 1f) * 0.5f * window.WindowWidth,
+                    (1f - ndc.Y) * 0.5f * window.WindowHeight);
+
+                if (screenPos.X < 0 || screenPos.X > window.WindowWidth ||
+                    screenPos.Y < 0 || screenPos.Y > window.WindowHeight)
+                {
+                    continue;
+                }
+
+                ImGui.SetNextWindowPos(screenPos, ImGuiCond.Always, new Vector2(0.5f, 1f));
+                ImGui.SetNextWindowBgAlpha(0.35f);
+
+                string hiddenLabel = $"###Nametag_{player.Id}";
+
+                if (ImGui.Begin(hiddenLabel,
+                        ImGuiWindowFlags.NoDecoration |
+                        ImGuiWindowFlags.AlwaysAutoResize |
+                        ImGuiWindowFlags.NoSavedSettings |
+                        ImGuiWindowFlags.NoFocusOnAppearing |
+                        ImGuiWindowFlags.NoNav))
+                {
+                    ImGui.Text("Player " + player.Id.ToString());
+                    ImGui.End();
+                }
+            }
+        }
+
+        private string ChatInput = "";
+        private List<string> ChatMessages = new List<string>();
+        private bool ChatWindowOpen = true;
+        private bool ChatInputActive = false;
+
+        private unsafe int InputTextCallback(ImGuiInputTextCallbackData* data)
+        {
+            return 0;
+        }
+        
+        private bool ScrollToBottom = false;
+
+        private void RenderChatWindow()
+        {
+            if (!ChatWindowOpen) return;
+
+            // Set the window position to the bottom right corner
+            var viewport = ImGui.GetMainViewport();
+            Vector2 windowSize = new Vector2(400, 300); // Fixed size for the chat window
+            Vector2 windowPos = new Vector2(
+                viewport.Pos.X + viewport.Size.X - windowSize.X - 10, // 10px padding from right
+                viewport.Pos.Y + viewport.Size.Y - windowSize.Y - 10 // 10px padding from bottom
+            );
+
+            ImGui.SetNextWindowPos(windowPos, ImGuiCond.Always);
+            ImGui.SetNextWindowSize(windowSize, ImGuiCond.Always);
+
+            // Begin the chat window with flags to prevent resizing, moving, and docking
+            if (ImGui.Begin("Chat", ref ChatWindowOpen,
+                    ImGuiWindowFlags.NoResize |
+                    ImGuiWindowFlags.NoMove |
+                    ImGuiWindowFlags.NoCollapse |
+                    ImGuiWindowFlags.NoDocking))
+            {
+                unsafe
+                {
+                    Vector2 currentSize = ImGui.GetWindowSize();
+
+                    // Show chat messages
+                    for (int i = 0; i < ChatMessages.Count; i++)
+                    {
+                        ImGui.TextWrapped(ChatMessages[i]);
+                    }
+
+                    float inputBoxHeight = ImGui.GetFrameHeightWithSpacing();
+                    float scrollMax = ImGui.GetScrollMaxY();
+
+                    // Scroll if near bottom OR if resize happened
+                    if (ScrollToBottom || ImGui.GetScrollY() >= scrollMax - inputBoxHeight)
+                    {
+                        ImGui.SetScrollY(scrollMax);
+                        ScrollToBottom = false;
+                    }
+
+                    ImGui.Separator();
+
+                    // Input text box flags
+                    ImGuiInputTextFlags inputTextFlags =
+                        ImGuiInputTextFlags.EnterReturnsTrue |
+                        ImGuiInputTextFlags.CallbackCompletion |
+                        ImGuiInputTextFlags.CallbackHistory;
+
+                    bool reclaimFocus = false;
+
+                    if (ImGui.InputText("##ChatInput", ref ChatInput, 256, inputTextFlags, InputTextCallback))
+                    {
+                        if (!string.IsNullOrWhiteSpace(ChatInput))
+                        {
+                            if (NetworkManager.IsConnected)
+                            {
+                                NetworkManager.SendRPC("ChatMessage",
+                                    new string[] { "Player " + NetworkManager.ClientId.ToString(), ChatInput });
+                            }
+                            else
+                            {
+                                ChatMessages.Add($"You: {ChatInput}");
+                            }
+
+                            ChatInput = "";
+                            ScrollToBottom = true; // Ensure scroll to bottom after sending a message
+                        }
+
+                        reclaimFocus = true;
+                    }
+
+                    ImGui.SetItemDefaultFocus();
+
+                    if (reclaimFocus || (ChatInputActive && !ImGui.IsItemActive()))
+                    {
+                        ImGui.SetKeyboardFocusHere(-1);
+                    }
+
+                    ChatInputActive = ImGui.IsItemActive();
+
+                    ImGui.End();
+                }
+            }
+        }
+
         private static Vector3 EulerToDirection(Vector3 eulerDegrees)
         {
             Vector3 radians = eulerDegrees * (MathF.PI / 180f);
@@ -139,8 +399,94 @@ namespace SoftwareRenderer
             return Vector3.Normalize(direction);
         }
 
+        private Networking NetworkManager = null;
+
+        class ConnectedPlayer
+        {
+            public int Id = 0;
+            public Vector3 Position = Vector3.Zero;
+            public Quaternion Rotation = Quaternion.Identity;
+        }
+
+        private List<ConnectedPlayer> Players = new List<ConnectedPlayer>();
+
+        async void HandleConnection(string IP = "127.0.0.1")
+        {
+            NetworkManager = new Networking();
+            bool Success = await NetworkManager.Connect(IP);
+            if (!Success)
+            {
+                System.Environment.Exit(1);
+            }
+            if (NetworkManager.IsConnected)
+            {
+                NetworkManager.OnReceiveRPC += (Method, Params) =>
+                {
+                    if (Method == "ConnectedPlayer")
+                    {
+                        Players.Add(new ConnectedPlayer { Id = int.Parse(Params[0]) });
+                    }
+
+                    if (Method == "Update")
+                    {
+                        if (Params.Length >= 4
+                            && int.TryParse(Params[0], out int playerId)
+                            && float.TryParse(Params[1], out float posX)
+                            && float.TryParse(Params[2], out float posY)
+                            && float.TryParse(Params[3], out float posZ)
+                            && float.TryParse(Params[4], out float rotX)
+                            && float.TryParse(Params[5], out float rotY)
+                            && float.TryParse(Params[6], out float rotZ)
+                            && float.TryParse(Params[7], out float rotW))
+                        {
+                            var player = Players.Find(p => p.Id == playerId);
+                            if (player != null)
+                            {
+                                player.Position = new Vector3(posX, posY, posZ);
+                                player.Rotation = new Quaternion(rotX, rotY, rotZ, rotW);
+                            }
+                        }
+                    }
+
+                    if (Method == "DisconnectedPlayer")
+                    {
+                        if (Params.Length >= 1 && int.TryParse(Params[0], out int disconnectedId))
+                        {
+                            var player = Players.Find(p => p.Id == disconnectedId);
+                            if (player != null)
+                            {
+                                Players.Remove(player);
+                                Console.WriteLine($"Player disconnected: {disconnectedId}");
+                            }
+                        }
+                    }
+
+                    if (Method == "ChatMessage")
+                    {
+                        if (Params.Length >= 2)
+                        {
+                            string playerName = Params[0];
+                            string message = Params[1];
+                            ChatMessages.Add($"{playerName}: {message}");
+                        }
+                    }
+                };
+                NetworkManager.SendRPC("ConnectedPlayer", [NetworkManager.ClientId.ToString()], BufferRPC: true);
+            }
+        }
+
         public void Main(string[] args)
         {
+
+            string IPAddress = "127.0.0.1"; // Default to localhost
+
+            if (args.Length > 0)
+            {
+                IPAddress = args[0];
+            }
+
+            HandleConnection(IPAddress);
+
             var window = new MainWindow("Software Renderer - E1M1")
             {
                 RenderScale = 1 / 4f
@@ -185,21 +531,43 @@ namespace SoftwareRenderer
             Rasterizer.RenderDebugMode = Rasterizer.DebugMode.None;
 
             window.UpdateEvent += DeltaTime =>
-            { 
-                
+            {
+                if (NetworkManager.IsConnected)
+                {
+                    if (CharacterController != null)
+                    {
+                        Vector3 EulerDegrees = CameraObj.GetEulerAngles();
+                        Quaternion Rotation = Quaternion.CreateFromYawPitchRoll(EulerDegrees.Y * MathF.PI / 180f, 0, 0);
+                        NetworkManager.SendRPC("Update", new string[]
+                        {
+                            NetworkManager.ClientId.ToString(),
+                            CharacterController.Position.X.ToString(),
+                            CharacterController.Position.Y.ToString(),
+                            CharacterController.Position.Z.ToString(),
+                            Rotation.X.ToString(),
+                            Rotation.Y.ToString(),
+                            Rotation.Z.ToString(),
+                            Rotation.W.ToString()
+                        });
+                    }
+                }
+
+
+                var io = ImGui.GetIO();
+                io.ConfigFlags |= ImGuiConfigFlags.DockingEnable | ImGuiConfigFlags.ViewportsEnable |
+                                  ImGuiConfigFlags.DpiEnableScaleViewports;
+
+                var Viewport = ImGui.GetMainViewport();
+                ImGui.SetNextWindowPos(Viewport.Pos);
+                ImGui.SetNextWindowSize(Viewport.Size);
+                ImGui.SetNextWindowViewport(Viewport.ID);
+
+                ImGui.DockSpaceOverViewport(Viewport.ID, Viewport, ImGuiDockNodeFlags.PassthruCentralNode);
+
+                RenderChatWindow();
 
                 if (!MouseLocked)
                 {
-                    var io = ImGui.GetIO();
-                    io.ConfigFlags |= ImGuiConfigFlags.DockingEnable | ImGuiConfigFlags.ViewportsEnable |
-                                      ImGuiConfigFlags.DpiEnableScaleViewports;
-
-                    var Viewport = ImGui.GetMainViewport();
-                    ImGui.SetNextWindowPos(Viewport.Pos);
-                    ImGui.SetNextWindowSize(Viewport.Size);
-                    ImGui.SetNextWindowViewport(Viewport.ID);
-
-                    ImGui.DockSpaceOverViewport(Viewport.ID, Viewport, ImGuiDockNodeFlags.PassthruCentralNode);
                     ImGui.Begin("Renderer Controls", ImGuiWindowFlags.None);
 
                     if (ImGui.CollapsingHeader("Performance", ImGuiTreeNodeFlags.DefaultOpen))
@@ -210,12 +578,24 @@ namespace SoftwareRenderer
                         ImGui.Text($"Cached Textures: {CachedTextures.Count}");
                     }
 
+
                     if (ImGui.CollapsingHeader("Scene Info", ImGuiTreeNodeFlags.DefaultOpen))
                     {
                         ImGui.Text($"Loaded Meshes: {E1M1Model?.Count ?? 0}");
                         ImGui.Text($"Runtime: {Time:F2}s");
                         ImGui.Text($"Window Size: {window.WindowWidth}x{window.WindowHeight}");
                         ImGui.Text($"Render Size: {window.RenderWidth}x{window.RenderHeight}");
+                    }
+
+                    if (ImGui.CollapsingHeader("Multiplayer", ImGuiTreeNodeFlags.DefaultOpen))
+                    {
+                        ImGui.Text("Connected Players:");
+                        foreach (var player in Players)
+                        {
+                            ImGui.Text("Player ID: " + player.Id);
+                            ImGui.Text("Player Position: " + player.Position.ToString());
+                            ImGui.Text("Player Rotation: " + player.Rotation.ToString());
+                        }
                     }
 
                     if (ImGui.CollapsingHeader("Camera", ImGuiTreeNodeFlags.DefaultOpen))
@@ -240,15 +620,18 @@ namespace SoftwareRenderer
                             pitch = Math.Clamp(pitch, -89f, 89f);
                             updated = true;
                         }
+
                         if (ImGui.DragFloat("Yaw (°)", ref yaw, 0.5f))
                         {
                             yaw = yaw % 360f;
                             updated = true;
                         }
+
                         if (ImGui.DragFloat("Roll (°)", ref roll, 0.5f))
                         {
                             updated = true;
                         }
+
                         if (updated)
                         {
                             Quaternion newRotation = Quaternion.CreateFromYawPitchRoll(
@@ -315,7 +698,8 @@ namespace SoftwareRenderer
                         if (ImGui.DragFloat3("Gravity", ref gravity, 0.1f, -20f, 20f))
                             CharacterController.Gravity = gravity;
 
-                        ImGui.Text($"Velocity: {CharacterController.Velocity.X:F2}, {CharacterController.Velocity.Y:F2}, {CharacterController.Velocity.Z:F2}");
+                        ImGui.Text(
+                            $"Velocity: {CharacterController.Velocity.X:F2}, {CharacterController.Velocity.Y:F2}, {CharacterController.Velocity.Z:F2}");
                         ImGui.Text($"Is Grounded: {CharacterController.IsGrounded}");
                     }
 
@@ -347,15 +731,17 @@ namespace SoftwareRenderer
                         {
                             LightDir = EulerToDirection(LightEulerDegrees);
                         }
+
                         ImGui.ColorEdit4("Light Color", ref LightColor);
                     }
 
                     ImGui.End();
-                    if (!LoadedLayout)
-                    {
-                        ImGui.LoadIniSettingsFromDisk("./Layouts/DefaultLayout.ini");
-                        LoadedLayout = true;
-                    }
+                }
+
+                if (!LoadedLayout)
+                {
+                    ImGui.LoadIniSettingsFromDisk("./Layouts/DefaultLayout.ini");
+                    LoadedLayout = true;
                 }
 
                 ProjectionMatrix = Matrix4x4.CreatePerspectiveFieldOfView(
@@ -377,15 +763,16 @@ namespace SoftwareRenderer
                     right.Y = 0;
                     right = Vector3.Normalize(right);
 
-                    if (keyboard.IsKeyPressed(Key.W)) moveInput += front;
-                    if (keyboard.IsKeyPressed(Key.S)) moveInput -= front;
-                    if (keyboard.IsKeyPressed(Key.A)) moveInput -= right;
-                    if (keyboard.IsKeyPressed(Key.D)) moveInput += right;
+                    if (!ChatInputActive)
+                    {
+                        if (keyboard.IsKeyPressed(Key.W)) moveInput += front;
+                        if (keyboard.IsKeyPressed(Key.S)) moveInput -= front;
+                        if (keyboard.IsKeyPressed(Key.A)) moveInput -= right;
+                        if (keyboard.IsKeyPressed(Key.D)) moveInput += right;
+                        JumpRequested = keyboard.IsKeyPressed(Key.Space);
+                    }
 
-                    IsRunning = keyboard.IsKeyPressed(Key.ShiftLeft);
-                    JumpRequested = keyboard.IsKeyPressed(Key.Space);
-
-                    CharacterController.Update((float)DeltaTime, moveInput, JumpRequested, IsRunning);
+                    CharacterController.Update((float)DeltaTime, moveInput, JumpRequested);
 
                     CameraObj.Position = CharacterController.Position;
                 }
@@ -403,9 +790,20 @@ namespace SoftwareRenderer
                 window.ClearDepthBuffer();
                 window.ClearColorBuffer(new Vector4(ClearColor.X, ClearColor.Y, ClearColor.Z, 1f));
                 RenderE1M1(window);
+                RenderConnectedPlayers(window, CameraObj.GetViewMatrix());
+                RenderPlayerNametags(window, CameraObj.GetViewMatrix(), ProjectionMatrix);
                 window.RenderFrame();
             };
-            
+            window.CloseEvent += () =>
+            {
+                if (NetworkManager.IsConnected)
+                {
+                    NetworkManager.SendRPC("DisconnectedPlayer", new string[] { NetworkManager.ClientId.ToString() });
+                }
+
+                NetworkManager.Close();
+            };
+
             window.Run();
         }
     }
