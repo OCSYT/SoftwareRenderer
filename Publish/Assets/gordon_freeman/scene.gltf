@@ -1,0 +1,314 @@
+{
+  "accessors": [
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 118,
+      "max": [
+        2.6638998985290527,
+        72.96710205078125,
+        7.268700122833252
+      ],
+      "min": [
+        -2.8060998916625977,
+        60.210899353027344,
+        -2.3559999465942383
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "byteOffset": 1416,
+      "componentType": 5126,
+      "count": 118,
+      "max": [
+        0.9925044775009155,
+        0.9998651742935181,
+        0.9893221855163574
+      ],
+      "min": [
+        -0.9936268925666809,
+        -0.9988923668861389,
+        -0.9983088374137878
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 118,
+      "max": [
+        0.9688000082969666,
+        0.8827999830245972
+      ],
+      "min": [
+        0.0,
+        0.17190000414848328
+      ],
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 0,
+      "componentType": 5125,
+      "count": 459,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 2,
+      "byteOffset": 2832,
+      "componentType": 5126,
+      "count": 477,
+      "max": [
+        12.97920036315918,
+        65.43990325927734,
+        7.341700077056885
+      ],
+      "min": [
+        -12.549200057983398,
+        0.16689999401569366,
+        -6.063000202178955
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "byteOffset": 8556,
+      "componentType": 5126,
+      "count": 477,
+      "max": [
+        0.9977412223815918,
+        0.9997493624687195,
+        0.9995058178901672
+      ],
+      "min": [
+        -0.9989786744117737,
+        -0.9999662637710571,
+        -0.9998496174812317
+      ],
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 1,
+      "byteOffset": 944,
+      "componentType": 5126,
+      "count": 477,
+      "max": [
+        0.9765999913215637,
+        0.9804999828338623
+      ],
+      "min": [
+        0.0,
+        0.011699999682605267
+      ],
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 0,
+      "byteOffset": 1836,
+      "componentType": 5125,
+      "count": 1458,
+      "type": "SCALAR"
+    }
+  ],
+  "asset": {
+    "extras": {
+      "author": "ArtEast (https://sketchfab.com/ArtEast)",
+      "license": "CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)",
+      "source": "https://sketchfab.com/3d-models/gordon-freeman-half-life-1-e325b0155441418bbff939e8e7dd97ef",
+      "title": "Gordon Freeman Half-life 1"
+    },
+    "generator": "Sketchfab-12.67.0",
+    "version": "2.0"
+  },
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteLength": 7668,
+      "name": "floatBufferViews",
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteLength": 4760,
+      "byteOffset": 7668,
+      "byteStride": 8,
+      "name": "floatBufferViews",
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteLength": 14280,
+      "byteOffset": 12428,
+      "byteStride": 12,
+      "name": "floatBufferViews",
+      "target": 34962
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 26708,
+      "uri": "scene.bin"
+    }
+  ],
+  "images": [
+    {
+      "uri": "textures/DM_Base.bmp_baseColor.png"
+    },
+    {
+      "uri": "textures/DM_Face.bmp_baseColor.png"
+    }
+  ],
+  "materials": [
+    {
+      "doubleSided": true,
+      "name": "DM_Base.bmp",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0.536765287075376,
+        "roughnessFactor": 0.46988338227872734
+      }
+    },
+    {
+      "doubleSided": true,
+      "name": "DM_Face.bmp",
+      "pbrMetallicRoughness": {
+        "baseColorTexture": {
+          "index": 1
+        },
+        "metallicFactor": 0.0
+      }
+    }
+  ],
+  "meshes": [
+    {
+      "name": "DM_Face.bmp",
+      "primitives": [
+        {
+          "attributes": {
+            "NORMAL": 1,
+            "POSITION": 0,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 1,
+          "mode": 4
+        }
+      ]
+    },
+    {
+      "name": "DM_Base.bmp",
+      "primitives": [
+        {
+          "attributes": {
+            "NORMAL": 5,
+            "POSITION": 4,
+            "TEXCOORD_0": 6
+          },
+          "indices": 7,
+          "material": 0,
+          "mode": 4
+        }
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "children": [
+        1
+      ],
+      "matrix": [
+        0.02426249161362648,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        5.387355364844577e-18,
+        -0.02426249161362648,
+        0.0,
+        0.0,
+        0.02426249161362648,
+        5.387355364844577e-18,
+        0.0,
+        0.0,
+        -8.516230565192015e-08,
+        -1.4217100385849338e-07,
+        1.0
+      ],
+      "name": "Sketchfab_model"
+    },
+    {
+      "children": [
+        2,
+        4
+      ],
+      "matrix": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -4.371139006309477e-08,
+        0.999999999999999,
+        0.0,
+        0.0,
+        -0.999999999999999,
+        -4.371139006309477e-08,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "name": "Collada visual scene group"
+    },
+    {
+      "children": [
+        3
+      ],
+      "name": "DM_Face.bmp"
+    },
+    {
+      "mesh": 0,
+      "name": "DM_Face.bmp"
+    },
+    {
+      "children": [
+        5
+      ],
+      "name": "DM_Base.bmp"
+    },
+    {
+      "mesh": 1,
+      "name": "DM_Base.bmp"
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987,
+      "wrapS": 10497,
+      "wrapT": 10497
+    }
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "Sketchfab_Scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "textures": [
+    {
+      "sampler": 0,
+      "source": 0
+    },
+    {
+      "sampler": 0,
+      "source": 1
+    }
+  ]
+}
