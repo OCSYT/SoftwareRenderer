@@ -190,7 +190,7 @@ namespace SoftwareRenderer
                         var model = collisionModels[i];
                         var modelMatrix = modelMatrices[i];
 
-                        Vector3 rayStart = Position + Offsets[j] * (Radius - 0.01f);
+                        Vector3 rayStart = Position + (Vector3.Normalize(Offsets[j]) * (Radius - 0.01f));
                         Vector3 rayEnd = rayStart + Vector3.UnitY * direction * (Height * 0.501f);
 
                         Parallel.ForEach(model, mesh =>
