@@ -577,7 +577,6 @@ namespace SoftwareRenderer
                     if (CharacterController != null &&
                         ImGui.CollapsingHeader("Character Controller", ImGuiTreeNodeFlags.DefaultOpen))
                     {
-                        ImGui.Text("Camera Position:");
                         Vector3 camPos = CameraObj.Position;
                         if (ImGui.DragFloat3("Position", ref camPos, 0.1f))
                         {
@@ -585,9 +584,8 @@ namespace SoftwareRenderer
                             CharacterController.Position = camPos;
                         }
                         
-                        ImGui.Text("Camera Offset:");
                         Vector3 camOffset = CharacterController.CamOffset;
-                        if (ImGui.DragFloat3("CamOffset", ref camOffset, 0.1f))
+                        if (ImGui.DragFloat3("Camera Offset", ref camOffset, 0.1f))
                         {
                             CharacterController.CamOffset = camOffset;
                         }

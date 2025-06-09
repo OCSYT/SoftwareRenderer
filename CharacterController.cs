@@ -19,7 +19,7 @@ namespace SoftwareRenderer
         public Vector3 Gravity { get; set; } = new(0, -14.0f, 0);
         public float Height { get; set; } = 0.5f;
         public float Radius { get; set; } = 0.15f;
-        public float StepSize { get; set; } = 0.2f;
+        public float StepSize { get; set; } = 0.3f;
         public float MoveSpeed { get; set; } = 5.0f;
         public float JumpForce { get; set; } = 4f;
         public float GroundAcceleration { get; set; } = 3.5f;
@@ -190,9 +190,11 @@ namespace SoftwareRenderer
                         var model = collisionModels[i];
                         var modelMatrix = modelMatrices[i];
 
-                        Vector3 rayStart = Position + (Vector3.Normalize(Offsets[j]) * (Radius - 0.01f));
-                        Vector3 rayEnd = rayStart + Vector3.UnitY * direction * (Height * 0.501f);
+                        Vector3 offset = Vector3.Normalize(Offsets[j]) * (Radius - 0.01f);
+                        Vector3 basePosition = Position + offset;
 
+                        Vector3 rayStart = basePosition;
+                        Vector3 rayEnd = basePosition + (Vector3.UnitY * direction * Height);
                         Parallel.ForEach(model, mesh =>
                         {
                             lock (_checkPlaneLock)
@@ -233,7 +235,6 @@ namespace SoftwareRenderer
             List<Mesh>[] sceneModels = null, Matrix4x4[] modelMatrices = null)
         {
             const int MaxSlideAttempts = 3;
-            const float MinMoveDistance = 0.001f;
             const float SkinWidth = 0.01f;
 
             if (depth >= MaxSlideAttempts || sceneModels == null || modelMatrices == null || sceneModels.Length != modelMatrices.Length)
@@ -241,7 +242,6 @@ namespace SoftwareRenderer
 
             Vector3 moveVector = desiredPos - currentPos;
             float moveDistance = moveVector.Length();
-            if (moveDistance < MinMoveDistance) return currentPos;
 
             Vector3 direction = Vector3.Normalize(moveVector);
             float nearestHitDistance = moveDistance;
@@ -306,16 +306,11 @@ namespace SoftwareRenderer
             if (MathF.Abs(alignment) > 0.9f)
                 return safeStopPos;
 
-            if (remainingMove.LengthSquared() < MinMoveDistance * MinMoveDistance)
-                return safeStopPos;
-
             Vector3 slideDirection = Vector3.Cross(hitNormal, Vector3.Cross(remainingMove, hitNormal));
             if (slideDirection == Vector3.Zero)
                 return safeStopPos;
 
             slideDirection = Vector3.Normalize(slideDirection) * remainingMove.Length();
-            if (slideDirection.LengthSquared() < MinMoveDistance * MinMoveDistance)
-                return safeStopPos;
 
             Vector3 adjustedSlideTarget = safeStopPos + slideDirection;
             return MoveWithSlide(safeStopPos, adjustedSlideTarget, radius, depth + 1, sceneModels, modelMatrices);
