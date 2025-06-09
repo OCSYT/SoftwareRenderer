@@ -27,7 +27,7 @@ namespace SoftwareRenderer
         public float MaxAirSpeed { get; set; } = 6.0f;
         public float GroundFriction { get; set; } = 6.0f;
         public float AirControl { get; set; } = 0.2f;
-
+        public Vector3 CamOffset { get; set; } = new(0.0f, 0.15f, 0.0f);
         // Environment
         private readonly List<Mesh>[] _collisionModels;
         private readonly Matrix4x4[] _modelMatrices;

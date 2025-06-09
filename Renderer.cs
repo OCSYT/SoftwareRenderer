@@ -536,15 +536,6 @@ namespace SoftwareRenderer
 
                     if (ImGui.CollapsingHeader("Camera", ImGuiTreeNodeFlags.DefaultOpen))
                     {
-                        ImGui.Text("Camera Position:");
-                        Vector3 camPos = CameraObj.Position;
-                        if (ImGui.DragFloat3("Position", ref camPos, 0.1f))
-                        {
-                            CameraObj.Position = camPos;
-                            if (CharacterController != null)
-                                CharacterController.Position = camPos;
-                        }
-
                         ImGui.Text("Rotation:");
                         Vector3 eulerDegrees = CameraObj.GetEulerAngles();
                         float pitch = eulerDegrees.X;
@@ -586,6 +577,21 @@ namespace SoftwareRenderer
                     if (CharacterController != null &&
                         ImGui.CollapsingHeader("Character Controller", ImGuiTreeNodeFlags.DefaultOpen))
                     {
+                        ImGui.Text("Camera Position:");
+                        Vector3 camPos = CameraObj.Position;
+                        if (ImGui.DragFloat3("Position", ref camPos, 0.1f))
+                        {
+                            CameraObj.Position = camPos;
+                            CharacterController.Position = camPos;
+                        }
+                        
+                        ImGui.Text("Camera Offset:");
+                        Vector3 camOffset = CharacterController.CamOffset;
+                        if (ImGui.DragFloat3("CamOffset", ref camOffset, 0.1f))
+                        {
+                            CharacterController.CamOffset = camOffset;
+                        }
+                        
                         float moveSpeed = CharacterController.MoveSpeed;
                         if (ImGui.DragFloat("Move Speed", ref moveSpeed, 0.1f, 1f, 20f))
                             CharacterController.MoveSpeed = moveSpeed;
@@ -706,7 +712,7 @@ namespace SoftwareRenderer
 
                     CharacterController.Update((float)DeltaTime, moveInput, JumpRequested);
 
-                    CameraObj.Position = CharacterController.Position;
+                    CameraObj.Position = CharacterController.Position + CharacterController.CamOffset;
                 }
 
                 bool isEscapePressed = keyboard.IsKeyPressed(Key.Escape);
