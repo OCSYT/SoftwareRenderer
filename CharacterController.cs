@@ -20,7 +20,6 @@ namespace SoftwareRenderer
         public float Height { get; set; } = 0.5f;
         public float Radius { get; set; } = 0.15f;
         public float StepSize { get; set; } = 0.2f;
-        public float GroundCheckDistance { get; set; } = 0.05f;
         public float MoveSpeed { get; set; } = 5.0f;
         public float JumpForce { get; set; } = 4f;
         public float GroundAcceleration { get; set; } = 3.5f;
@@ -79,7 +78,7 @@ namespace SoftwareRenderer
 
             if (IsGrounded && groundPoint != Vector3.NegativeInfinity)
             {
-                Position = Position with { Y = groundPoint.Y + Height * 0.5f + GroundCheckDistance };
+                Position = Position with { Y = groundPoint.Y + Height * 0.5f };
                 if (Velocity.Y < 0)
                     Velocity = new Vector3(Velocity.X, 0, Velocity.Z);
             }
@@ -162,48 +161,66 @@ namespace SoftwareRenderer
             Velocity += new Vector3(wishDir.X * k, 0, wishDir.Z * k);
         }
 
-        private bool CheckPlane(List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices, float direction, out Vector3 point)
+        private bool CheckPlane(List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices, float direction,
+            out Vector3 point)
         {
-            Vector3 rayStart = Position;
-            Vector3 rayEnd = rayStart + Vector3.UnitY * direction * (Height * 0.501f + GroundCheckDistance);
+            Vector3[] Offsets =
+            {
+                new Vector3(0, 0, 0),
+                new Vector3(-1, 0, 0),
+                new Vector3(1, 0, 0),
+                new Vector3(0, 0, -1),
+                new Vector3(0, 0, 1),
+                new Vector3(-1, 0, -1),
+                new Vector3(-1, 0, 1),
+                new Vector3(1, 0, -1),
+                new Vector3(1, 0, 1)
+            };
+
 
             bool hit = false;
             Vector3 hitPoint = Vector3.NegativeInfinity;
 
             if (collisionModels != null && modelMatrices != null && collisionModels.Length == modelMatrices.Length)
             {
-                for (int i = 0; i < collisionModels.Length; i++)
+                Parallel.For(0, Offsets.Length, j =>
                 {
-                    var model = collisionModels[i];
-                    var modelMatrix = modelMatrices[i];
-
-                    Parallel.ForEach(model.ToArray(), mesh =>
+                    for (int i = 0; i < collisionModels.Length; i++)
                     {
-                        lock (_checkPlaneLock)
+                        var model = collisionModels[i];
+                        var modelMatrix = modelMatrices[i];
+
+                        Vector3 rayStart = Position + Offsets[j] * (Radius - 0.01f);
+                        Vector3 rayEnd = rayStart + Vector3.UnitY * direction * (Height * 0.501f);
+
+                        Parallel.ForEach(model, mesh =>
                         {
-                            Vector3 rayDir = rayEnd - rayStart;
-                            if (rayDir.LengthSquared() > 0 &&
-                                Physics.Raycast(rayStart, Vector3.Normalize(rayDir),
-                                    mesh.Vertices.ToArray(), mesh.Indices.ToArray(), modelMatrix,
-                                    out float hitDistance, out var currentHitPoint, out _))
+                            lock (_checkPlaneLock)
                             {
-                                if (hitDistance <= (Height * 0.5f + GroundCheckDistance))
+                                Vector3 rayDir = rayEnd - rayStart;
+                                if (rayDir.LengthSquared() > 0 &&
+                                    Physics.Raycast(rayStart, Vector3.Normalize(rayDir),
+                                        mesh.Vertices.ToArray(), mesh.Indices.ToArray(), modelMatrix,
+                                        out float hitDistance, out var currentHitPoint, out _))
                                 {
-                                    lock (_checkPlaneLock)
+                                    if (hitDistance <= (Height * 0.5f))
                                     {
-                                        if (!hit || hitDistance < Vector3.Distance(rayStart, hitPoint))
+                                        lock (_checkPlaneLock)
                                         {
-                                            hitPoint = currentHitPoint;
-                                            hit = true;
+                                            if (!hit || hitDistance < Vector3.Distance(rayStart, hitPoint))
+                                            {
+                                                hitPoint = currentHitPoint;
+                                                hit = true;
+                                            }
                                         }
                                     }
                                 }
                             }
-                        }
-                    });
+                        });
 
-                    if (hit) break;
-                }
+                        if (hit) break;
+                    }
+                });
             }
 
             point = hitPoint;

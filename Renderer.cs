@@ -43,119 +43,53 @@ namespace SoftwareRenderer
         private readonly ConcurrentDictionary<string, Texture> CachedTextures = new();
         private int RenderedModels;
 
-        private Mesh PlayerCubeModel;
+        private List<Mesh> PlayerModel;
 
-        private void InitPlayerCubeModel()
-        {
-            var vertices = new List<Shaders.VertexInput>
-            {
-                // Back face (Z = -0.5, normal pointing back)
-                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 0), -Vector3.UnitZ,
-                    Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, -0.5f), new Vector2(1, 0), -Vector3.UnitZ,
-                    Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, -0.5f), new Vector2(1, 1), -Vector3.UnitZ, Vector4.One),
-                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, -0.5f), new Vector2(0, 1), -Vector3.UnitZ,
-                    Vector4.One),
-
-                // Front face (Z = 0.5, normal pointing forward)
-                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, 0.5f), new Vector2(0, 0), Vector3.UnitZ, Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, 0.5f), new Vector2(1, 0), Vector3.UnitZ, Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, 0.5f), new Vector2(1, 1), Vector3.UnitZ, Vector4.One),
-                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, 0.5f), new Vector2(0, 1), Vector3.UnitZ, Vector4.One),
-
-                // Top face (Y = 0.5, normal pointing up)
-                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, -0.5f), new Vector2(0, 0), Vector3.UnitY, Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, -0.5f), new Vector2(1, 0), Vector3.UnitY, Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, 0.5f), new Vector2(1, 1), Vector3.UnitY, Vector4.One),
-                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, 0.5f), new Vector2(0, 1), Vector3.UnitY, Vector4.One),
-
-                // Bottom face (Y = -0.5, normal pointing down)
-                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 0), -Vector3.UnitY,
-                    Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, -0.5f), new Vector2(1, 0), -Vector3.UnitY,
-                    Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, 0.5f), new Vector2(1, 1), -Vector3.UnitY, Vector4.One),
-                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, 0.5f), new Vector2(0, 1), -Vector3.UnitY,
-                    Vector4.One),
-
-                // Right face (X = 0.5, normal pointing right)
-                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, -0.5f), new Vector2(0, 0), Vector3.UnitX, Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, -0.5f), new Vector2(1, 0), Vector3.UnitX, Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, 0.5f, 0.5f), new Vector2(1, 1), Vector3.UnitX, Vector4.One),
-                new Shaders.VertexInput(new Vector3(0.5f, -0.5f, 0.5f), new Vector2(0, 1), Vector3.UnitX, Vector4.One),
-
-                // Left face (X = -0.5, normal pointing left)
-                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, -0.5f), new Vector2(0, 0), -Vector3.UnitX,
-                    Vector4.One),
-                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, -0.5f), new Vector2(1, 0), -Vector3.UnitX,
-                    Vector4.One),
-                new Shaders.VertexInput(new Vector3(-0.5f, 0.5f, 0.5f), new Vector2(1, 1), -Vector3.UnitX, Vector4.One),
-                new Shaders.VertexInput(new Vector3(-0.5f, -0.5f, 0.5f), new Vector2(0, 1), -Vector3.UnitX,
-                    Vector4.One),
-            };
-
-            var indices = new List<int>
-            {
-                // Back face (normal -Z) — clockwise winding from outside view
-                0, 2, 1, 2, 0, 3,
-
-                // Front face (normal +Z) — counter-clockwise winding
-                4, 5, 6, 6, 7, 4,
-
-                // Top face (normal +Y) — should be clockwise (flip winding)
-                8, 10, 9, 10, 8, 11,
-
-                // Bottom face (normal -Y) — should be counter-clockwise (flip winding)
-                12, 13, 14, 14, 15, 12,
-
-                // Right face (normal +X) — counter-clockwise winding
-                16, 17, 18, 18, 19, 16,
-
-                // Left face (normal -X) — clockwise winding
-                20, 22, 21, 22, 20, 23
-            };
-
-            var mesh = new Mesh(vertices, indices);
-            BoundingSphere sphere = FrustumCuller.CalculateBoundingSphere(vertices.ToArray());
-            mesh.SphereBounds = sphere;
-            PlayerCubeModel = (mesh);
-        }
 
         private void RenderConnectedPlayers(MainWindow window, Matrix4x4 viewMatrix)
         {
-            if (PlayerCubeModel == null)
+            if (PlayerModel == null)
             {
-                InitPlayerCubeModel();
+                var PlayerModelTemp = Model.LoadModel("./Assets/gordon_freeman/scene.gltf");
+                PlayerModel = PlayerModelTemp.Meshes;
             }
+            
 
-            if (PlayerCubeModel == null || CharacterController == null) return;
+            if (PlayerModel == null || CharacterController == null) return;
 
             foreach (var Player in Players)
             {
+                if(Player.Id == NetworkManager.ClientId) continue;
                 Matrix4x4 PlayerModelMatrix =
-                    Matrix4x4.CreateScale(CharacterController.Radius, CharacterController.Height,
-                        CharacterController.Radius) *
-                    Matrix4x4.CreateFromQuaternion(Player.Rotation) *
-                    Matrix4x4.CreateTranslation(Player.Position);
+                    Matrix4x4.CreateScale(CharacterController.Height/2) *
+                    Matrix4x4.CreateFromQuaternion(Player.Rotation * Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI)) *
+                    Matrix4x4.CreateTranslation(Player.Position - (Vector3.UnitY * CharacterController.Height/2));
 
 
+                foreach (var Mesh in PlayerModel)
+                {
+                    Texture texture = null;
 
-                if (!FrustumCuller.IsSphereInFrustum(PlayerCubeModel.SphereBounds, PlayerModelMatrix, viewMatrix,
-                        ProjectionMatrix))
-                    continue;
+                    if (Mesh?.Material?.TexturePaths?.TryGetValue(TextureSlot.Diffuse, out var texturePath) == true)
+                    {
+                        texture = CachedTextures.GetOrAdd(texturePath, SoftwareRenderer.Texture.LoadTexture);
+                    }
 
-                Rasterizer.RenderMesh(
-                    window,
-                    PlayerCubeModel.Vertices.ToArray(),
-                    PlayerCubeModel.Indices.ToArray(),
-                    PlayerModelMatrix,
-                    viewMatrix,
-                    ProjectionMatrix,
-                    VertexShader,
-                    input => FragmentShader(input, null), // no texture for simple cube
-                    Rasterizer.CullMode.Back);
+                    if (!FrustumCuller.IsSphereInFrustum(Mesh.SphereBounds, PlayerModelMatrix, viewMatrix,
+                            ProjectionMatrix))
+                        continue;
 
+                    Rasterizer.RenderMesh(
+                        window,
+                        Mesh.Vertices.ToArray(),
+                        Mesh.Indices.ToArray(),
+                        PlayerModelMatrix,
+                        viewMatrix,
+                        ProjectionMatrix,
+                        VertexShader,
+                        input => FragmentShader(input, texture), // no texture for simple cube
+                        Rasterizer.CullMode.Back);
+                }
             }
         }
 
@@ -253,7 +187,7 @@ namespace SoftwareRenderer
 
             foreach (var player in Players)
             {
-                Vector3 headPosition = player.Position + new Vector3(0, CharacterController.Height, 0);
+                Vector3 headPosition = player.Position + new Vector3(0, CharacterController.Height/2, 0);
                 Vector4 worldPos = new Vector4(headPosition, 1.0f);
                 Vector4 clipPos = Vector4.Transform(worldPos, viewProjection);
 
@@ -303,56 +237,59 @@ namespace SoftwareRenderer
         
         private bool ScrollToBottom = false;
 
+
         private void RenderChatWindow()
         {
-            if (!ChatWindowOpen) return;
-
-            // Set the window position to the bottom right corner
             var viewport = ImGui.GetMainViewport();
-            Vector2 windowSize = new Vector2(400, 300); // Fixed size for the chat window
-            Vector2 windowPos = new Vector2(
-                viewport.Pos.X + viewport.Size.X - windowSize.X - 10, // 10px padding from right
-                viewport.Pos.Y + viewport.Size.Y - windowSize.Y - 10 // 10px padding from bottom
-            );
+            Vector2 windowSize = new Vector2(400, 300);
+            Vector2 windowPos = new Vector2(viewport.Pos.X + viewport.Size.X - windowSize.X - 10, viewport.Pos.Y + 10);
 
             ImGui.SetNextWindowPos(windowPos, ImGuiCond.Always);
             ImGui.SetNextWindowSize(windowSize, ImGuiCond.Always);
 
-            // Begin the chat window with flags to prevent resizing, moving, and docking
             if (ImGui.Begin("Chat", ref ChatWindowOpen,
-                    ImGuiWindowFlags.NoResize |
-                    ImGuiWindowFlags.NoMove |
-                    ImGuiWindowFlags.NoCollapse |
-                    ImGuiWindowFlags.NoDocking))
+                    ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoDocking))
             {
                 unsafe
                 {
-                    Vector2 currentSize = ImGui.GetWindowSize();
+                    ChatWindowOpen = true;
 
-                    // Show chat messages
+                    ImGui.BeginChild("ChatContent", new Vector2(0, -ImGui.GetFrameHeightWithSpacing()));
+
                     for (int i = 0; i < ChatMessages.Count; i++)
                     {
-                        ImGui.TextWrapped(ChatMessages[i]);
+                        if (!string.IsNullOrEmpty(ChatMessages[i]))
+                        {
+                            ImGui.PushTextWrapPos(0.0f);
+                            ImGui.TextUnformatted(ChatMessages[i]);
+                            ImGui.PopTextWrapPos();
+                        }
                     }
 
                     float inputBoxHeight = ImGui.GetFrameHeightWithSpacing();
                     float scrollMax = ImGui.GetScrollMaxY();
+                    float scrollY = ImGui.GetScrollY();
+                    float lastMessageHeight = 0f;
 
-                    // Scroll if near bottom OR if resize happened
-                    if (ScrollToBottom || ImGui.GetScrollY() >= scrollMax - inputBoxHeight)
+                    if (ChatMessages.Count > 0 && !string.IsNullOrEmpty(ChatMessages[ChatMessages.Count - 1]))
+                    {
+                        lastMessageHeight =
+                            ImGui.CalcTextSize(ChatMessages[ChatMessages.Count - 1], false, ImGui.GetContentRegionAvail().X)
+                                .Y + ImGui.GetStyle().ItemSpacing.Y;
+                    }
+
+                    if (ScrollToBottom || scrollY >= scrollMax - (lastMessageHeight + inputBoxHeight))
                     {
                         ImGui.SetScrollY(scrollMax);
                         ScrollToBottom = false;
                     }
 
+                    ImGui.EndChild();
                     ImGui.Separator();
 
-                    // Input text box flags
-                    ImGuiInputTextFlags inputTextFlags =
-                        ImGuiInputTextFlags.EnterReturnsTrue |
-                        ImGuiInputTextFlags.CallbackCompletion |
-                        ImGuiInputTextFlags.CallbackHistory;
-
+                    ImGuiInputTextFlags inputTextFlags = ImGuiInputTextFlags.EnterReturnsTrue |
+                                                         ImGuiInputTextFlags.CallbackCompletion |
+                                                         ImGuiInputTextFlags.CallbackHistory;
                     bool reclaimFocus = false;
 
                     if (ImGui.InputText("##ChatInput", ref ChatInput, 256, inputTextFlags, InputTextCallback))
@@ -362,7 +299,7 @@ namespace SoftwareRenderer
                             if (NetworkManager.IsConnected)
                             {
                                 NetworkManager.SendRPC("ChatMessage",
-                                    new string[] { "Player " + NetworkManager.ClientId.ToString(), ChatInput });
+                                    new string[] { $"Player {NetworkManager.ClientId}", ChatInput });
                             }
                             else
                             {
@@ -370,7 +307,7 @@ namespace SoftwareRenderer
                             }
 
                             ChatInput = "";
-                            ScrollToBottom = true; // Ensure scroll to bottom after sending a message
+                            ScrollToBottom = true;
                         }
 
                         reclaimFocus = true;
@@ -384,10 +321,9 @@ namespace SoftwareRenderer
                     }
 
                     ChatInputActive = ImGui.IsItemActive();
-
-                    ImGui.End();
                 }
             }
+            ImGui.End();
         }
 
         private static Vector3 EulerToDirection(Vector3 eulerDegrees)
@@ -689,10 +625,6 @@ namespace SoftwareRenderer
                         float stepSize = CharacterController.StepSize;
                         if (ImGui.DragFloat("Step Size", ref stepSize, 0.1f, 0.5f, 3f))
                             CharacterController.StepSize = stepSize;
-
-                        float groundCheckDistance = CharacterController.GroundCheckDistance;
-                        if (ImGui.DragFloat("Ground Check Distance", ref groundCheckDistance, 0.01f, 0.01f, 0.5f))
-                            CharacterController.GroundCheckDistance = groundCheckDistance;
 
                         Vector3 gravity = CharacterController.Gravity;
                         if (ImGui.DragFloat3("Gravity", ref gravity, 0.1f, -20f, 20f))
