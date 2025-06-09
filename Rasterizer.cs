@@ -106,31 +106,43 @@ namespace SoftwareRenderer
         private static IEnumerable<Shaders.VertexOutput[]> ClipTriangleAgainstNearPlane(
             Shaders.VertexOutput v0, Shaders.VertexOutput v1, Shaders.VertexOutput v2)
         {
-            const float ClipEpsilon = 1e-4f;
-            Shaders.VertexOutput[] output = new Shaders.VertexOutput[5];
-            int outputCount = 0;
+            const float ClipEpsilon = 1e-5f;
+
+            List<Shaders.VertexOutput> outputVertices = new List<Shaders.VertexOutput>(5);
 
             static bool IsInside(in Vector4 clipPosition)
             {
-                float z = clipPosition.Z;
-                float w = clipPosition.W;
-                float bound = w * (1f + ClipEpsilon);
-                return z >= -bound && z <= bound;
+                return clipPosition.Z >= -clipPosition.W - ClipEpsilon;
             }
 
             static Shaders.VertexOutput Intersect(in Shaders.VertexOutput a, in Shaders.VertexOutput b)
             {
                 Vector4 p0 = a.ClipPosition;
                 Vector4 p1 = b.ClipPosition;
+
                 float d0 = p0.Z + p0.W;
                 float d1 = p1.Z + p1.W;
-                float denom = d0 - d1;
 
-                float t = denom != 0f ? Math.Clamp(d0 / denom, 0f, 1f) : 0f;
+                float denom = d0 - d1;
+                float t;
+
+                if (Math.Abs(denom) < float.Epsilon)
+                {
+                    t = 0f;
+                }
+                else
+                {
+                    t = Math.Clamp(d0 / denom, 0f, 1f);
+                }
+
                 return Shaders.Lerp(a, b, t, a.Interpolate);
             }
 
-            if (!IsInside(v0.ClipPosition) && !IsInside(v1.ClipPosition) && !IsInside(v2.ClipPosition))
+            bool v0In = IsInside(v0.ClipPosition);
+            bool v1In = IsInside(v1.ClipPosition);
+            bool v2In = IsInside(v2.ClipPosition);
+
+            if (!v0In && !v1In && !v2In)
                 yield break;
 
             void ClipEdge(in Shaders.VertexOutput prev, in Shaders.VertexOutput curr)
@@ -140,32 +152,29 @@ namespace SoftwareRenderer
 
                 if (prevIn)
                 {
-                    if (currIn)
+                    outputVertices.Add(prev);
+                    if (!currIn)
                     {
-                        output[outputCount++] = curr;
-                    }
-                    else
-                    {
-                        output[outputCount++] = Intersect(prev, curr);
+                        outputVertices.Add(Intersect(prev, curr));
                     }
                 }
                 else if (currIn)
                 {
-                    output[outputCount++] = Intersect(prev, curr);
-                    output[outputCount++] = curr;
+                    outputVertices.Add(Intersect(prev, curr));
                 }
             }
 
-            ClipEdge(v2, v0);
+            outputVertices.Clear();
             ClipEdge(v0, v1);
             ClipEdge(v1, v2);
+            ClipEdge(v2, v0);
 
-            if (outputCount < 3) yield break;
+            if (outputVertices.Count < 3) yield break;
 
-            var vStart = output[0];
-            for (int i = 1; i < outputCount - 1; i++)
+            var vStart = outputVertices[0];
+            for (int i = 1; i < outputVertices.Count - 1; i++)
             {
-                yield return new[] { vStart, output[i], output[i + 1] };
+                yield return new[] { vStart, outputVertices[i], outputVertices[i + 1] };
             }
         }
 
@@ -344,14 +353,13 @@ namespace SoftwareRenderer
             BlendMode blendMode)
         {
             if (window.RenderWidth <= 0 || window.RenderHeight <= 0) return;
-            
-            
+
             if (TileLocks == null || TilesX != (window.RenderWidth + TileSize - 1) / TileSize ||
                 TilesY != (window.RenderHeight + TileSize - 1) / TileSize)
             {
                 InitializeTileLocks(window.RenderWidth, window.RenderHeight);
             }
-            
+
             int renderWidth = window.RenderWidth;
             int renderHeight = window.RenderHeight;
             float invWidth = 1f / (renderWidth - 1);
@@ -368,18 +376,19 @@ namespace SoftwareRenderer
             for (int i = 0; i < 3; i++)
             {
                 float invW = 1f / outputs[i].ClipPosition.W;
-                Vector3 viewPos = new Vector3(
+                Vector3 ndc = new Vector3(
                     outputs[i].ClipPosition.X * invW,
                     outputs[i].ClipPosition.Y * invW,
                     outputs[i].ClipPosition.Z * invW
                 );
                 
                 screenCoords[i] = new Vector2D<int>(
-                    (int)MathF.Round(viewPos.X * halfRenderWidth + halfWidthPlusHalf),
-                    (int)MathF.Round(-viewPos.Y * halfRenderHeight + halfHeightPlusHalf)
+                    (int)MathF.Round((ndc.X * 0.5f + 0.5f) * (renderWidth - 1)),
+                    (int)MathF.Round((1.0f - (ndc.Y * 0.5f + 0.5f)) * (renderHeight - 1))
                 );
+                
+                depths[i] = (ndc.Z + 1.0f) * 0.5f;
 
-                depths[i] = viewPos.Z;
                 outputs[i].ScreenCoords = new Vector2(screenCoords[i].X * invWidth, screenCoords[i].Y * invHeight);
             }
 
