@@ -63,6 +63,7 @@ namespace SoftwareRenderer
         {
             public int Id { get; set; }
             public Vector3 Position { get; set; } = Vector3.Zero;
+            public Vector3 LocalPosition { get; set; } = Vector3.Zero;
             public Quaternion Rotation { get; set; } = Quaternion.Identity;
             public float Health { get; set; } = 100f;
             public string Name { get; set; } = "Player";
@@ -251,7 +252,7 @@ namespace SoftwareRenderer
         {
             return Matrix4x4.CreateScale(CharacterController.Height / 2) *
                    Matrix4x4.CreateFromQuaternion(player.Rotation * Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI)) *
-                   Matrix4x4.CreateTranslation(player.Position - Vector3.UnitY * CharacterController.Height / 2);
+                   Matrix4x4.CreateTranslation(player.LocalPosition - Vector3.UnitY * CharacterController.Height / 2);
         }
 
         private void Update(double deltaTime)
@@ -263,7 +264,7 @@ namespace SoftwareRenderer
             UpdateUserInterface((float)deltaTime);
             UpdateCharacterController((float)deltaTime);
             UpdateInput();
-            RenderScene();
+            RenderScene((float)deltaTime);
         }
 
         private void UpdateNetwork()
@@ -400,7 +401,7 @@ namespace SoftwareRenderer
             WasVPressed = isVPressed;
         }
 
-        private void RenderScene()
+        private void RenderScene(float DeltaTime)
         {
             ProjectionMatrix = Matrix4x4.CreatePerspectiveFieldOfView(
                 FieldOfView * MathF.PI / 180,
@@ -412,7 +413,7 @@ namespace SoftwareRenderer
             Window.ClearColorBuffer(new Vector4(ClearColor.X, ClearColor.Y, ClearColor.Z, 1f));
             RenderDust2();
             RenderGun();
-            RenderConnectedPlayers();
+            RenderConnectedPlayers(DeltaTime);
             RenderPlayerNametags();
             Window.RenderFrame();
         }
@@ -497,8 +498,8 @@ namespace SoftwareRenderer
                 }
             });
         }
-
-        private void RenderConnectedPlayers()
+        
+        private void RenderConnectedPlayers(float DeltaTime)
         {
             if (PlayerModel == null)
             {
@@ -510,8 +511,14 @@ namespace SoftwareRenderer
             var viewMatrix = Camera.GetViewMatrix();
             foreach (var player in Players)
             {
-                if (player.Id == NetworkManager.ClientId) continue;
+                float InterpolationRate = 12f;
+                float Factor = 1f - MathF.Exp(-InterpolationRate * DeltaTime);
+                
+                player.LocalPosition = Vector3.Lerp(player.LocalPosition, player.Position, Factor);
 
+
+                if (player.Id == NetworkManager.ClientId) continue;
+                
                 var playerMatrix = CreatePlayerMatrix(player);
                 foreach (var mesh in PlayerModel)
                 {
@@ -544,7 +551,7 @@ namespace SoftwareRenderer
             {
                 if (player.Id == NetworkManager.ClientId) continue;
 
-                var headPosition = player.Position + new Vector3(0, CharacterController.Height / 2f, 0);
+                var headPosition = player.LocalPosition + new Vector3(0, CharacterController.Height / 2f, 0);
                 var clipPos = Vector4.Transform(new Vector4(headPosition, 1f), viewProjection);
 
                 if (clipPos.W <= 0.001f) continue;
@@ -856,7 +863,7 @@ namespace SoftwareRenderer
         {
             if (!NetworkManager.IsConnected) return;
 
-            NetworkManager.OnReceiveRPC += (method, parameters) =>
+            NetworkManager.OnReceiveRPC += async (method, parameters) =>
             {
                 switch (method)
                 {
@@ -908,7 +915,7 @@ namespace SoftwareRenderer
                             hitPlayer.Health = Math.Max(0f, hitPlayer.Health - damage);
                             if (hitPlayer.Health <= 0f)
                             {
-                                ChatMessages.Add($"Player {hitPlayer.Name} was killed!");
+                                ChatMessages.Add($"{hitPlayer.Name} was killed!");
                                 if (NetworkManager.ClientId == hitPlayerId && CharacterController != null)
                                 {
                                     Random random = new Random();
@@ -968,7 +975,7 @@ namespace SoftwareRenderer
 
                             AdjustVolume(AudioBuf, AudioLen, Volume / 100f);
 
-                            Spec.callback = null; // No callback, we use SDL_QueueAudio
+                            Spec.callback = null;
                             Spec.userdata = IntPtr.Zero;
 
                             var DeviceId = SDL.SDL_OpenAudioDevice(null, 0, ref Spec, out _, 0);
@@ -981,19 +988,22 @@ namespace SoftwareRenderer
 
                             SDL.SDL_QueueAudio(DeviceId, AudioBuf, AudioLen);
                             SDL.SDL_PauseAudioDevice(DeviceId, 0);
-                            int sampleRate = Spec.freq;
-                            int channels = Spec.channels;
-                            int bytesPerSample = Spec.format == SDL.AUDIO_S16SYS ? 1 : 2;
-                            int durationMs = (int)((AudioLen / (sampleRate * channels * bytesPerSample)) * 1000);
-                            async Task CleanUp()
+                            
+                            int bytesPerSample = SDL.SDL_AUDIO_BITSIZE(Spec.format) / 8;
+                            int durationMs = (int)((AudioLen / (Spec.channels * bytesPerSample * (float)Spec.freq)) * 1000);
+                            
+                            _ = Task.Run(async () =>
                             {
-                                await Task.Delay(durationMs); 
-                                SDL.SDL_CloseAudioDevice(DeviceId);
-                                SDL.SDL_FreeWAV(AudioBuf);
-                                SDL.SDL_CloseAudioDevice(DeviceId);
-                            }
-
-                            CleanUp();
+                                try
+                                {
+                                    await Task.Delay(durationMs);
+                                }
+                                finally
+                                {
+                                    SDL.SDL_CloseAudioDevice(DeviceId);
+                                    SDL.SDL_FreeWAV(AudioBuf);
+                                }
+                            });
                         }
                         catch (Exception ex)
                         {
@@ -1007,7 +1017,7 @@ namespace SoftwareRenderer
         unsafe void AdjustVolume(IntPtr buffer, uint length, float volume)
         {
             short* samples = (short*)buffer;
-            int sampleCount = (int)(length / 2); // 2 bytes per sample (16-bit)
+            int sampleCount = (int)(length / 2);
             for (int i = 0; i < sampleCount; i++)
             {
                 int sample = (int)(samples[i] * volume);

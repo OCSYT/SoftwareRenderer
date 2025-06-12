@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
@@ -196,7 +197,8 @@ namespace SoftwareRenderer
 
             static void ClipSingleTriangle(
                 in Shaders.VertexOutput A, in Shaders.VertexOutput B, in Shaders.VertexOutput C,
-                Shaders.VertexOutput[] OutputVertices, List<Shaders.VertexOutput[]> Results)
+                Shaders.VertexOutput[] OutputVertices, List<Shaders.VertexOutput[]> Results,
+                ArrayPool<Shaders.VertexOutput> arrayPool)
             {
                 bool AIn = IsInside(A.ClipPosition);
                 bool BIn = IsInside(B.ClipPosition);
@@ -209,7 +211,11 @@ namespace SoftwareRenderer
                 // Completely inside case
                 if (AIn && BIn && CIn)
                 {
-                    Results.Add(new[] { A, B, C });
+                    var triangle = arrayPool.Rent(3);
+                    triangle[0] = A;
+                    triangle[1] = B;
+                    triangle[2] = C;
+                    Results.Add(triangle); // Caller must return to pool
                     return;
                 }
 
@@ -246,39 +252,56 @@ namespace SoftwareRenderer
                 var VStart = OutputVertices[0];
                 for (int I = 1; I < VertexCount - 1; I++)
                 {
-                    Results.Add(new[] { VStart, OutputVertices[I], OutputVertices[I + 1] });
+                    var triangle = arrayPool.Rent(3);
+                    triangle[0] = VStart;
+                    triangle[1] = OutputVertices[I];
+                    triangle[2] = OutputVertices[I + 1];
+                    Results.Add(triangle); // Caller must return to pool
                 }
             }
 
             // Early exit if all vertices are inside
             if (IsInside(V0.ClipPosition) && IsInside(V1.ClipPosition) && IsInside(V2.ClipPosition))
             {
-                return new[] { new[] { V0, V1, V2 } };
+                var pool = ArrayPool<Shaders.VertexOutput>.Shared;
+                var triangle = pool.Rent(3);
+                triangle[0] = V0;
+                triangle[1] = V1;
+                triangle[2] = V2;
+                return new[] { triangle }; // Caller must return to pool
             }
 
             // Subdivide based on world space triangle size
             int SubdivisionCount = EstimateSubdivisionLevel(V0, V1, V2);
-            Shaders.VertexOutput[]? OutputBuffer;
-            if (SubdivisionCount == 1)
+            var pool2 = ArrayPool<Shaders.VertexOutput>.Shared;
+            Shaders.VertexOutput[] outputBuffer = pool2.Rent(6); // Rent buffer for clipping
+            List<Shaders.VertexOutput[]> clippedResults;
+
+            try
             {
-                // No subdivision needed
-                OutputBuffer = new Shaders.VertexOutput[6];
-                var ClippedResults = new List<Shaders.VertexOutput[]>();
-                ClipSingleTriangle(V0, V1, V2, OutputBuffer, ClippedResults);
-                return ClippedResults;
+                if (SubdivisionCount == 1)
+                {
+                    // No subdivision needed
+                    clippedResults = new List<Shaders.VertexOutput[]>(4); // Small initial capacity
+                    ClipSingleTriangle(V0, V1, V2, outputBuffer, clippedResults, pool2);
+                    return clippedResults; // Caller must return arrays to pool
+                }
+
+                // Run triangle subdivision
+                var clippableTriangles = SubdivideTriangleByFraction(V0, V1, V2, SubdivisionCount);
+                clippedResults = new List<Shaders.VertexOutput[]>(clippableTriangles.Count() * 2); // Pre-allocate
+
+                foreach (var triangle in clippableTriangles)
+                {
+                    ClipSingleTriangle(triangle[0], triangle[1], triangle[2], outputBuffer, clippedResults, pool2);
+                }
+
+                return clippedResults; // Caller must return arrays to pool
             }
-
-            // Run triangle subdivision
-            var ClippableTriangles = SubdivideTriangleByFraction(V0, V1, V2, SubdivisionCount);
-            var FinalResults = new List<Shaders.VertexOutput[]>(ClippableTriangles.Count() * 2); // Pre-allocate
-            OutputBuffer = new Shaders.VertexOutput[6];
-
-            foreach (var Triangle in ClippableTriangles)
+            finally
             {
-                ClipSingleTriangle(Triangle[0], Triangle[1], Triangle[2], OutputBuffer, FinalResults);
+                pool2.Return(outputBuffer); // Ensure buffer is returned to pool
             }
-
-            return FinalResults;
         }
 
         public static void RenderMesh(
@@ -519,6 +542,13 @@ namespace SoftwareRenderer
             RasterizeTriangle(window, screenCoords, depths, outputs, fragmentShader, cullMode, depthTest, blendMode);
         }
 
+        private static readonly Vector2[] sampleOffsets = new Vector2[]
+        {
+            new Vector2(0.25f, 0.25f),
+            new Vector2(0.75f, 0.25f),
+            new Vector2(0.25f, 0.75f),
+            new Vector2(0.75f, 0.75f)
+        };
         private static void RasterizeTriangle(
             MainWindow window,
             Vector2[] screen,
@@ -573,13 +603,7 @@ namespace SoftwareRenderer
             int tileMinY = minY / TileSize;
             int tileMaxY = maxY / TileSize;
 
-            Vector2[] sampleOffsets = new Vector2[]
-            {
-                new Vector2(0.25f, 0.25f),
-                new Vector2(0.75f, 0.25f),
-                new Vector2(0.25f, 0.75f),
-                new Vector2(0.75f, 0.75f)
-            };
+
             const float centerBias = -0.5f;
 
             Parallel.For(tileMinY, tileMaxY + 1, tileY =>
@@ -598,7 +622,7 @@ namespace SoftwareRenderer
 
                     if (startX > endX || startY > endY) continue;
 
-                    object tileLock = GetTileLock(tileX, tileY);
+                    object tileLock = TileLocks[tileY * TilesX + tileX];
                     lock (tileLock)
                     {
                         // Initialize edge functions at start of row
@@ -722,11 +746,7 @@ namespace SoftwareRenderer
                 }
             });
         }
-
-        private static object GetTileLock(int tileX, int tileY)
-        {
-            return TileLocks[tileY * TilesX + tileX];
-        }
+        
 
         private static Func<float, float, bool> GetDepthTestFunction(DepthTest test)
         {
