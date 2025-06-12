@@ -956,7 +956,7 @@ namespace SoftwareRenderer
                             float.Parse(parameters[1]),
                             float.Parse(parameters[2]));
                         float Distance = Vector3.Distance(Camera.Position, Position);
-                        float Volume = Math.Clamp(25f / (0.25f * Distance), 0f, 100f); // SFML style volume 0-100
+                        float Volume = Math.Clamp(25f / (0.25f * Distance), 0f, 25f); // SFML style volume 0-100
                         string FilePath = "./Assets/pistol.wav";
 
                         try
