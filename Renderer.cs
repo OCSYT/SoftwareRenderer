@@ -571,7 +571,7 @@ namespace SoftwareRenderer
                         ImGuiWindowFlags.NoFocusOnAppearing |
                         ImGuiWindowFlags.NoNav))
                 {
-                    ImGui.Text($"Player {player.Id} - Health: {player.Health:F0}");
+                    ImGui.Text($"Player {player.Name} - Health: {player.Health:F0}");
                     ImGui.End();
                 }
             }
