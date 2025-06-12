@@ -1,4 +1,4 @@
-﻿using Silk.NET.Windowing;
+﻿﻿using Silk.NET.Windowing;
 using Silk.NET.OpenGL;
 using Silk.NET.Maths;
 using System;
@@ -17,7 +17,7 @@ namespace SoftwareRenderer
         public ImGuiController ImGuiController;
         public IInputContext InputContext;
         private IWindow Window;
-        private GL Gl;
+        public static GL Gl { get; private set; }
         public int WindowWidth;
         public int WindowHeight;
         public int RenderWidth { get; set; } = 800;
@@ -25,8 +25,8 @@ namespace SoftwareRenderer
         public float RenderScale = 1.0f;
 
         // Buffers as 1D arrays for speed
-        private Vector4[] ColorBuffer;
-        private float[] DepthBuffer;
+        public Vector4[] ColorBuffer;
+        public float[] DepthBuffer;
         private uint TextureHandle;
 
         private uint VaoHandle;
@@ -42,12 +42,15 @@ namespace SoftwareRenderer
 
         public MainWindow(string Title = "Renderer")
         {
-            var options = WindowOptions.Default;
-            options.Size = new Vector2D<int>(800, 600);
-            options.Title = Title;
-            options.WindowState = WindowState.Normal;
-            options.WindowBorder = WindowBorder.Resizable;
-            options.VSync = false;
+            var options = WindowOptions.Default with
+            {
+                Size = new Vector2D<int>(800, 600),
+                Title = Title,
+                WindowState = WindowState.Normal,
+                WindowBorder = WindowBorder.Resizable,
+                VSync = false,
+                API = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible, new APIVersion(4, 3))
+            };
             WindowWidth = options.Size.X;
             WindowHeight = options.Size.Y;
             RenderWidth = options.Size.X;
@@ -60,14 +63,13 @@ namespace SoftwareRenderer
             Window.Resize += OnResize;
             Window.Closing += OnClosing;
         }
-        
 
         public void Run() => Window.Run();
 
         private void OnLoad()
         {
             InputContext = Window.CreateInput();
-            Gl = GL.GetApi(Window);
+            Gl = Window.CreateOpenGL();
             ImGuiController = new ImGuiController(Gl, Window, InputContext);
             Gl.ClearColor(0f, 0f, 0f, 1f);
 

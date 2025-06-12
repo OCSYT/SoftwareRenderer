@@ -1,0 +1,11 @@
+Model Information:
+* title:	De_Dust 2 with real light
+* source:	https://sketchfab.com/3d-models/de-dust-2-with-real-light-4ce74cd95c584ce9b12b5ed9dc418db5
+* author:	Neo_minigan (https://sketchfab.com/neominigan)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "De_Dust 2 with real light" (https://sketchfab.com/3d-models/de-dust-2-with-real-light-4ce74cd95c584ce9b12b5ed9dc418db5) by Neo_minigan (https://sketchfab.com/neominigan) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

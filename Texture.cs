@@ -27,16 +27,16 @@ namespace SoftwareRenderer
             v += (v < 0) ? 1f : 0f;
 
             // Convert to pixel coordinates
-            int x = (int)(u * Width);
-            int y = (int)(v * Height);
-            
-            x = x < 0 ? 0 : (x >= Width ? Width - 1 : x);
-            y = y < 0 ? 0 : (y >= Height ? Height - 1 : y);
-            
+            int x = (int)(u * Width) % Width;
+            int y = (int)(v * Height) % Height;
+
+            if (x < 0) x += Width;
+            if (y < 0) y += Height;
+
             int index = (y * Width + x) << 2;
 
             uint pixelData = BitConverter.ToUInt32(Data, index);
-            
+    
             const float inv255 = 1f / 255f;
             return new Vector4(
                 (pixelData & 0xFF) * inv255,

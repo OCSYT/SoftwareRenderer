@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -14,7 +15,8 @@ namespace SoftwareRenderer
             None,
             Wireframe
         }
-
+        public static float NearClip = 0.1f;
+        public static float FarClip = 1000f;
         public static DebugMode RenderDebugMode = DebugMode.None;
         static ParallelOptions Options = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
 
@@ -102,80 +104,159 @@ namespace SoftwareRenderer
                 }
             }
         }
-
-        private static IEnumerable<Shaders.VertexOutput[]> ClipTriangleAgainstNearPlane(
-            Shaders.VertexOutput v0, Shaders.VertexOutput v1, Shaders.VertexOutput v2)
+        
+        private static IEnumerable<Shaders.VertexOutput[]> SubdivideTriangleByFraction(
+            Shaders.VertexOutput V0, Shaders.VertexOutput V1, Shaders.VertexOutput V2, int FractionCount)
         {
-            const float ClipEpsilon = 1e-5f;
+            float InvFraction = 1f / FractionCount;
 
-            List<Shaders.VertexOutput> outputVertices = new List<Shaders.VertexOutput>(5);
-
-            static bool IsInside(in Vector4 clipPosition)
+            // Precompute all unique vertex positions using barycentric coordinates
+            var Grid = new Shaders.VertexOutput[FractionCount + 1][];
+            for (int I = 0; I <= FractionCount; I++)
             {
-                return clipPosition.Z >= -clipPosition.W - ClipEpsilon;
+                Grid[I] = new Shaders.VertexOutput[FractionCount - I + 1];
+                for (int J = 0; J <= FractionCount - I; J++)
+                {
+                    int K = FractionCount - I - J;
+                    float A = K * InvFraction;
+                    float B = I * InvFraction;
+                    float C = J * InvFraction;
+
+                    Vector3 barycentric = new Vector3(A, B, C);
+                    Grid[I][J] = Shaders.Lerp3(V0, V1, V2, barycentric, V0.Interpolate);
+                }
             }
 
-            static Shaders.VertexOutput Intersect(in Shaders.VertexOutput a, in Shaders.VertexOutput b)
+            // Construct triangles using precomputed grid
+            for (int I = 0; I < FractionCount; I++)
             {
-                Vector4 p0 = a.ClipPosition;
-                Vector4 p1 = b.ClipPosition;
-
-                float d0 = p0.Z + p0.W;
-                float d1 = p1.Z + p1.W;
-
-                float denom = d0 - d1;
-                float t;
-
-                if (Math.Abs(denom) < float.Epsilon)
+                for (int J = 0; J < FractionCount - I; J++)
                 {
-                    t = 0f;
-                }
-                else
-                {
-                    t = Math.Clamp(d0 / denom, 0f, 1f);
-                }
+                    var A = Grid[I][J];
+                    var B = Grid[I + 1][J];
+                    var C = Grid[I][J + 1];
 
-                return Shaders.Lerp(a, b, t, a.Interpolate);
-            }
+                    yield return new[] { A, B, C };
 
-            bool v0In = IsInside(v0.ClipPosition);
-            bool v1In = IsInside(v1.ClipPosition);
-            bool v2In = IsInside(v2.ClipPosition);
-
-            if (!v0In && !v1In && !v2In)
-                yield break;
-
-            void ClipEdge(in Shaders.VertexOutput prev, in Shaders.VertexOutput curr)
-            {
-                bool prevIn = IsInside(prev.ClipPosition);
-                bool currIn = IsInside(curr.ClipPosition);
-
-                if (prevIn)
-                {
-                    outputVertices.Add(prev);
-                    if (!currIn)
+                    if (I + J < FractionCount - 1)
                     {
-                        outputVertices.Add(Intersect(prev, curr));
+                        var D = Grid[I + 1][J + 1];
+                        yield return new[] { B, D, C };
                     }
                 }
-                else if (currIn)
+            }
+        }
+
+        private static IEnumerable<Shaders.VertexOutput[]> ClipTriangleAgainstNearPlane(
+            Shaders.VertexOutput V0, Shaders.VertexOutput V1, Shaders.VertexOutput V2)
+        {
+            const float ClipEpsilon = 1e-5f;
+            const int MaxSubdivisions = 32;
+            const float MaxEdgeLength = 0.5f; // world space threshold for edge length (adjust as needed)
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static bool IsInside(in Vector4 ClipPosition) =>
+                ClipPosition.Z >= -ClipPosition.W - ClipEpsilon;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            static Shaders.VertexOutput Intersect(in Shaders.VertexOutput A, in Shaders.VertexOutput B)
+            {
+                Vector4 P0 = A.ClipPosition;
+                Vector4 P1 = B.ClipPosition;
+
+                float D0 = P0.Z + P0.W;
+                float D1 = P1.Z + P1.W;
+                float Denom = D0 - D1;
+
+                float T = Math.Abs(Denom) < float.Epsilon ? 0f : Math.Clamp(D0 / Denom, 0f, 1f);
+                return Shaders.Lerp(A, B, T, A.Interpolate);
+            }
+
+            static float MaxEdgeLengthSqr(Vector3 A, Vector3 B, Vector3 C)
+            {
+                float AB = Vector3.DistanceSquared(A, B);
+                float BC = Vector3.DistanceSquared(B, C);
+                float CA = Vector3.DistanceSquared(C, A);
+                return Math.Max(AB, Math.Max(BC, CA));
+            }
+
+            static int EstimateSubdivisionLevel(Shaders.VertexOutput A, Shaders.VertexOutput B, Shaders.VertexOutput C)
+            {
+                Vector3 PosA = A.ClipPosition.AsVector3();
+                Vector3 PosB = B.ClipPosition.AsVector3();
+                Vector3 PosC = C.ClipPosition.AsVector3();
+
+                float MaxLen = MathF.Sqrt(MaxEdgeLengthSqr(PosA, PosB, PosC));
+
+                // Ratio of geometry size to NearClip — balanced means ratio ~1
+                float GeometryToClipRatio = MaxLen / MathF.Max(NearClip, 0.0001f);
+
+                // Only subdivide if geometry is significantly bigger than NearClip
+                if (GeometryToClipRatio <= 1.0f)
+                    return 1;
+
+                // Use this ratio directly to determine subdivisions
+                int Subdiv = (int)Math.Ceiling(GeometryToClipRatio)/9;
+                return Math.Clamp(Subdiv, 1, MaxSubdivisions);
+            }
+
+            static void ClipSingleTriangle(
+                in Shaders.VertexOutput A, in Shaders.VertexOutput B, in Shaders.VertexOutput C,
+                Shaders.VertexOutput[] OutputVertices, List<Shaders.VertexOutput[]> Results)
+            {
+                int VertexCount = 0;
+
+                bool AIn = IsInside(A.ClipPosition);
+                bool BIn = IsInside(B.ClipPosition);
+                bool CIn = IsInside(C.ClipPosition);
+
+                if (!AIn && !BIn && !CIn)
+                    return;
+
+                void ClipEdge(in Shaders.VertexOutput Prev, in Shaders.VertexOutput Curr, bool PrevIn, bool CurrIn)
                 {
-                    outputVertices.Add(Intersect(prev, curr));
+                    if (PrevIn)
+                    {
+                        if (VertexCount < OutputVertices.Length)
+                            OutputVertices[VertexCount++] = Prev;
+                        if (!CurrIn && VertexCount < OutputVertices.Length)
+                            OutputVertices[VertexCount++] = Intersect(Prev, Curr);
+                    }
+                    else if (CurrIn && VertexCount < OutputVertices.Length)
+                    {
+                        OutputVertices[VertexCount++] = Intersect(Prev, Curr);
+                    }
+                }
+
+                ClipEdge(A, B, AIn, BIn);
+                ClipEdge(B, C, BIn, CIn);
+                ClipEdge(C, A, CIn, AIn);
+
+                if (VertexCount < 3)
+                    return;
+
+                var VStart = OutputVertices[0];
+                for (int I = 1; I < VertexCount - 1; I++)
+                {
+                    Results.Add(new[] { VStart, OutputVertices[I], OutputVertices[I + 1] });
                 }
             }
 
-            outputVertices.Clear();
-            ClipEdge(v0, v1);
-            ClipEdge(v1, v2);
-            ClipEdge(v2, v0);
+            // Subdivide based on world space triangle size
+            int SubdivisionCount = EstimateSubdivisionLevel(V0, V1, V2);
 
-            if (outputVertices.Count < 3) yield break;
+            // Run triangle subdivision first
+            var ClippableTriangles = SubdivideTriangleByFraction(V0, V1, V2, SubdivisionCount);
 
-            var vStart = outputVertices[0];
-            for (int i = 1; i < outputVertices.Count - 1; i++)
+            var OutputBuffer = new Shaders.VertexOutput[6]; // Conservative max polygon size
+            var ClippedResults = new List<Shaders.VertexOutput[]>();
+
+            foreach (var Triangle in ClippableTriangles)
             {
-                yield return new[] { vStart, outputVertices[i], outputVertices[i + 1] };
+                ClipSingleTriangle(Triangle[0], Triangle[1], Triangle[2], OutputBuffer, ClippedResults);
             }
+
+            return ClippedResults;
         }
 
         public static void RenderMesh(
@@ -192,21 +273,32 @@ namespace SoftwareRenderer
             BlendMode blendMode = BlendMode.Alpha)
         {
             if (window.RenderWidth <= 0 || window.RenderHeight <= 0) return;
-            
+
             InitializeTileLocks(window.RenderWidth, window.RenderHeight);
 
             int triangleCount = indices.Length / 3;
-            var triangleData = new (int, int, int)[triangleCount];
-            
+            var triangleData = new (int i0, int i1, int i2, float avgDepth)[triangleCount];
+
+            // Compute triangle data and depths
             for (int i = 0; i < triangleCount; i++)
             {
                 int baseIdx = i * 3;
-                triangleData[i] = (indices[baseIdx], indices[baseIdx + 1], indices[baseIdx + 2]);
-            }
+                var v0 = vertexShader(vertices[indices[baseIdx]], model, view, projection);
+                var v1 = vertexShader(vertices[indices[baseIdx + 1]], model, view, projection);
+                var v2 = vertexShader(vertices[indices[baseIdx + 2]], model, view, projection);
 
+                // Compute average depth (in NDC space)
+                float avgDepth = (v0.ClipPosition.Z / v0.ClipPosition.W +
+                                  v1.ClipPosition.Z / v1.ClipPosition.W +
+                                  v2.ClipPosition.Z / v2.ClipPosition.W) / 3f;
+
+                triangleData[i] = (indices[baseIdx], indices[baseIdx + 1], indices[baseIdx + 2], avgDepth);
+            }
+            
+            
             Parallel.For(0, triangleCount, Options, i =>
             {
-                var (i0, i1, i2) = triangleData[i];
+                var (i0, i1, i2, _) = triangleData[i];
 
                 var v0 = vertexShader(vertices[i0], model, view, projection);
                 var v1 = vertexShader(vertices[i1], model, view, projection);
@@ -238,24 +330,23 @@ namespace SoftwareRenderer
 
         private static void DrawLine(
             MainWindow window,
-            Vector2D<int> p0,
-            Vector2D<int> p1,
+            Vector2 p0,
+            Vector2 p1,
             float[] depths,
             Shaders.VertexOutput[] outputs,
             Shaders.FragmentShader fragmentShader,
             DepthTest depthTest,
             BlendMode blendMode)
         {
-            int minX = Math.Max(Math.Min(p0.X, p1.X), 0);
-            int maxX = Math.Min(Math.Max(p0.X, p1.X), window.RenderWidth - 1);
-            int minY = Math.Max(Math.Min(p0.Y, p1.Y), 0);
-            int maxY = Math.Min(Math.Max(p0.Y, p1.Y), window.RenderHeight - 1);
+            int minX = (int)Math.Max(Math.Min(p0.X, p1.X), 0);
+            int maxX = (int)Math.Min(Math.Max(p0.X, p1.X), window.RenderWidth - 1);
+            int minY = (int)Math.Max(Math.Min(p0.Y, p1.Y), 0);
+            int maxY = (int)Math.Min(Math.Max(p0.Y, p1.Y), window.RenderHeight - 1);
 
             if (minX > maxX || minY > maxY) return;
 
             var depthFunc = GetDepthTestFunction(depthTest);
             int tileSize = TileSize;
-            var tileLocks = TileLocks;
 
             int tileMinX = minX / tileSize;
             int tileMaxX = maxX / tileSize;
@@ -265,6 +356,10 @@ namespace SoftwareRenderer
             float dx = p1.X - p0.X;
             float dy = p1.Y - p0.Y;
             float lineLengthSq = dx * dx + dy * dy;
+
+            // Compute line depth bounds for tile culling
+            float minDepth = Math.Min(depths[0], depths[1]);
+            float maxDepth = Math.Max(depths[0], depths[1]);
 
             Parallel.For(tileMinY, tileMaxY + 1, Options, tileY =>
             {
@@ -283,16 +378,15 @@ namespace SoftwareRenderer
                     if (startX > endX || startY > endY) continue;
 
                     object[] tileLocksCopy;
-                    int tilesXCopy, tilesYCopy;
+                    int tilesXCopy;
 
                     lock (TileLocksInitLock)
                     {
                         tileLocksCopy = TileLocks;
                         tilesXCopy = TilesX;
-                        tilesYCopy = TilesY;
                     }
-                    
-                    lock (tileLocksCopy[tileY * TilesX + tileX])
+
+                    lock (tileLocksCopy[tileY * tilesXCopy + tileX])
                     {
                         for (int y = startY; y <= endY; y++)
                         {
@@ -317,22 +411,24 @@ namespace SoftwareRenderer
                                 const float thresholdSq = 0.5f * 0.5f;
                                 if (distSq <= thresholdSq)
                                 {
-                                    float depth = 1/(depths[0] * (1 - t) + depths[1] * t);
+                                    float depth = 1 / (depths[0] * (1 - t) + depths[1] * t);
                                     float oldDepth = window.GetDepth(x, y);
-                                    if (depthFunc(depth, oldDepth))
+
+                                    if (!depthFunc(depth, oldDepth))
+                                        continue;
+
+                                    var interpolated = Interpolate(outputs[0], outputs[1], outputs[0], 1 - t, t, 0,
+                                        outputs[0].Interpolate);
+                                    var finalColor = fragmentShader(interpolated);
+
+                                    if (finalColor.HasValue && finalColor.Value.W != 0)
                                     {
-                                        var interpolated = Interpolate(outputs[0], outputs[1], outputs[0], 1 - t, t, 0, outputs[0].Interpolate);
-                                        var finalColor = fragmentShader(interpolated);
+                                        var dst = window.GetPixel(x, y);
+                                        var blended = Blend(finalColor.Value, dst, blendMode);
+                                        window.SetPixel(x, y, blended);
 
-                                        if (finalColor.HasValue && finalColor.Value.W != 0)
-                                        {
-                                            var dst = window.GetPixel(x, y);
-                                            var blended = Blend(finalColor.Value, dst, blendMode);
-                                            window.SetPixel(x, y, blended);
-
-                                            if (depthTest != DepthTest.Disabled)
-                                                window.SetDepth(x, y, depth);
-                                        }
+                                        if (depthTest != DepthTest.Disabled)
+                                            window.SetDepth(x, y, depth);
                                     }
                                 }
                             }
@@ -364,12 +460,8 @@ namespace SoftwareRenderer
             int renderHeight = window.RenderHeight;
             float invWidth = 1f / (renderWidth - 1);
             float invHeight = 1f / (renderHeight - 1);
-            float halfRenderWidth = renderWidth * 0.5f;
-            float halfRenderHeight = renderHeight * 0.5f;
-            float halfWidthPlusHalf = halfRenderWidth + 0.5f;
-            float halfHeightPlusHalf = halfRenderHeight + 0.5f;
 
-            Vector2D<int>[] screenCoords = new Vector2D<int>[3];
+            Vector2[] screenCoords = new Vector2[3];
             float[] depths = new float[3];
             Shaders.VertexOutput[] outputs = new Shaders.VertexOutput[] { v2, v1, v0 };
 
@@ -382,162 +474,253 @@ namespace SoftwareRenderer
                     outputs[i].ClipPosition.Z * invW
                 );
                 
-                screenCoords[i] = new Vector2D<int>(
-                    (int)MathF.Round((ndc.X * 0.5f + 0.5f) * (renderWidth - 1)),
-                    (int)MathF.Round((1.0f - (ndc.Y * 0.5f + 0.5f)) * (renderHeight - 1))
+                if (float.IsNaN(ndc.X) || float.IsNaN(ndc.Y) || float.IsNaN(ndc.Z) ||
+                    float.IsInfinity(ndc.X) || float.IsInfinity(ndc.Y) || float.IsInfinity(ndc.Z))
+                    return;
+                
+                screenCoords[i] = new Vector2(
+                    (int)Math.Floor((ndc.X * 0.5f + 0.5f) * renderWidth),
+                    (int)Math.Floor((1.0f - (ndc.Y * 0.5f + 0.5f)) * renderHeight) 
                 );
+                
                 
                 depths[i] = (ndc.Z + 1.0f) * 0.5f;
 
                 outputs[i].ScreenCoords = new Vector2(screenCoords[i].X * invWidth, screenCoords[i].Y * invHeight);
             }
+            if (v0.ClipPosition.W == 0 || v1.ClipPosition.W == 0 || v2.ClipPosition.W == 0)
+                return;
 
             if (EdgeFunction(screenCoords[0], screenCoords[1], screenCoords[2]) == 0) return;
 
             RasterizeTriangle(window, screenCoords, depths, outputs, fragmentShader, cullMode, depthTest, blendMode);
         }
 
-        private static void RasterizeTriangle(
-            MainWindow window,
-            Vector2D<int>[] screen,
-            float[] depths,
-            Shaders.VertexOutput[] outputs,
-            Shaders.FragmentShader fragmentShader,
-            CullMode cullMode,
-            DepthTest depthTest,
-            BlendMode blendMode)
+private static void RasterizeTriangle(
+    MainWindow window,
+    Vector2[] screen,
+    float[] depths,
+    Shaders.VertexOutput[] outputs,
+    Shaders.FragmentShader fragmentShader,
+    CullMode cullMode,
+    DepthTest depthTest,
+    BlendMode blendMode)
+{
+    ref var p0 = ref screen[0];
+    ref var p1 = ref screen[1];
+    ref var p2 = ref screen[2];
+
+    float area = EdgeFunction(p0, p1, p2);
+    if (area == 0) return;
+
+    bool isFrontFace = area < 0;
+    if ((cullMode == CullMode.Back && !isFrontFace) ||
+        (cullMode == CullMode.Front && isFrontFace))
+        return;
+
+    if (RenderDebugMode == DebugMode.Wireframe)
+    {
+        DrawLine(window, p0, p1, depths, outputs, fragmentShader, depthTest, blendMode);
+        DrawLine(window, p1, p2, depths, outputs, fragmentShader, depthTest, blendMode);
+        DrawLine(window, p2, p0, depths, outputs, fragmentShader, depthTest, blendMode);
+        return;
+    }
+
+    float invArea = 1f / area;
+
+    // Anti-aliasing settings
+    const int samples = 4; // 4x MSAA
+    Vector2[] sampleOffsets = new Vector2[]
+    {
+        new Vector2(0.25f, 0.25f),
+        new Vector2(0.75f, 0.25f),
+        new Vector2(0.25f, 0.75f),
+        new Vector2(0.75f, 0.75f)
+    };
+
+    int bias = 1; // or whatever bias you want to apply (usually 1 pixel)
+
+    int minX = (int)Math.Max(Math.Min(Math.Min(p0.X, p1.X), p2.X) - bias, 0);
+    int maxX = (int)Math.Min(Math.Max(Math.Max(p0.X, p1.X), p2.X) + bias, window.RenderWidth - 1);
+    int minY = (int)Math.Max(Math.Min(Math.Min(p0.Y, p1.Y), p2.Y) - bias, 0);
+    int maxY = (int)(Math.Min(Math.Max(Math.Max(p0.Y, p1.Y), p2.Y) + bias, window.RenderHeight - 1));
+
+    if (minX > maxX || minY > maxY) return;
+
+    int a01 = (int)(p0.Y - p1.Y), b01 = (int)(p1.X - p0.X);
+    int a12 = (int)(p1.Y - p2.Y), b12 = (int)(p2.X - p1.X);
+    int a20 = (int)(p2.Y - p0.Y), b20 = (int)(p0.X - p2.X);
+
+    var depthFunc = GetDepthTestFunction(depthTest);
+    int tileSize = TileSize;
+
+    int tileMinX = minX / tileSize;
+    int tileMaxX = maxX / tileSize;
+    int tileMinY = minY / tileSize;
+    int tileMaxY = maxY / tileSize;
+
+    var vector2D = p0;
+    var p3 = p2;
+    var vector2D1 = p1;
+
+    var vector2 = p0;
+    var vector3 = p2;
+    var vector4 = p1;
+    Parallel.For(tileMinY, tileMaxY + 1, Options, tileY =>
+    {
+        for (int tileX = tileMinX; tileX <= tileMaxX; tileX++)
         {
-            ref var p0 = ref screen[0];
-            ref var p1 = ref screen[1];
-            ref var p2 = ref screen[2];
+            int tileStartX = tileX * tileSize;
+            int tileEndX = Math.Min(tileStartX + tileSize - 1, window.RenderWidth - 1);
+            int tileStartY = tileY * tileSize;
+            int tileEndY = Math.Min(tileStartY + tileSize - 1, window.RenderHeight - 1);
 
-            float area = EdgeFunction(p0, p1, p2);
-            if (area == 0) return;
+            int startX = Math.Max(minX, tileStartX);
+            int endX = Math.Min(maxX, tileEndX);
+            int startY = Math.Max(minY, tileStartY);
+            int endY = Math.Min(maxY, tileEndY);
 
-            bool isFrontFace = area < 0;
-            if ((cullMode == CullMode.Back && !isFrontFace) ||
-                (cullMode == CullMode.Front && isFrontFace))
-                return;
+            if (startX > endX || startY > endY) continue;
 
-            if (RenderDebugMode == DebugMode.Wireframe)
+            int w0Row = (int)(a12 * (startX - vector2D1.X) + b12 * (startY - vector2D1.Y));
+            int w1Row = (int)(a20 * (startX - p3.X) + b20 * (startY - p3.Y));
+            int w2Row = (int)(a01 * (startX - vector2D.X) + b01 * (startY - vector2D.Y));
+
+            object[] tileLocksCopy;
+
+            lock (TileLocksInitLock)
             {
-                DrawLine(window, p0, p1, depths, outputs, fragmentShader, depthTest, blendMode);
-                DrawLine(window, p1, p2, depths, outputs, fragmentShader, depthTest, blendMode);
-                DrawLine(window, p2, p0, depths, outputs, fragmentShader, depthTest, blendMode);
-                return;
+                tileLocksCopy = TileLocks;
             }
 
-            float invArea = 1f / area;
-
-            int minX = Math.Max(Math.Min(Math.Min(p0.X, p1.X), p2.X), 0);
-            int maxX = Math.Min(Math.Max(Math.Max(p0.X, p1.X), p2.X), window.RenderWidth - 1);
-            int minY = Math.Max(Math.Min(Math.Min(p0.Y, p1.Y), p2.Y), 0);
-            int maxY = Math.Min(Math.Max(Math.Max(p0.Y, p1.Y), p2.Y), window.RenderHeight - 1);
-            if (minX > maxX || minY > maxY) return;
-
-            int a01 = p0.Y - p1.Y, b01 = p1.X - p0.X;
-            int a12 = p1.Y - p2.Y, b12 = p2.X - p1.X;
-            int a20 = p2.Y - p0.Y, b20 = p0.X - p2.X;
-
-            var depthFunc = GetDepthTestFunction(depthTest);
-            int tileSize = TileSize;
-
-            int tileMinX = minX / tileSize;
-            int tileMaxX = maxX / tileSize;
-            int tileMinY = minY / tileSize;
-            int tileMaxY = maxY / tileSize;
-
-            var vector2D = p0;
-            var p3 = p2;
-            var vector2D1 = p1;
-            Parallel.For(tileMinY, tileMaxY + 1, Options, tileY =>
+            lock (tileLocksCopy[tileY * TilesX + tileX])
             {
-                for (int tileX = tileMinX; tileX <= tileMaxX; tileX++)
+                for (int y = startY; y <= endY; y++)
                 {
-                    int tileStartX = tileX * tileSize;
-                    int tileEndX = Math.Min(tileStartX + tileSize - 1, window.RenderWidth - 1);
-                    int tileStartY = tileY * tileSize;
-                    int tileEndY = Math.Min(tileStartY + tileSize - 1, window.RenderHeight - 1);
+                    int w0 = w0Row;
+                    int w1 = w1Row;
+                    int w2 = w2Row;
 
-                    int startX = Math.Max(minX, tileStartX);
-                    int endX = Math.Min(maxX, tileEndX);
-                    int startY = Math.Max(minY, tileStartY);
-                    int endY = Math.Min(maxY, tileEndY);
-
-                    if (startX > endX || startY > endY) continue;
-
-                    int w0Row = a12 * (startX - vector2D1.X) + b12 * (startY - vector2D1.Y);
-                    int w1Row = a20 * (startX - p3.X) + b20 * (startY - p3.Y);
-                    int w2Row = a01 * (startX - vector2D.X) + b01 * (startY - vector2D.Y);
-
-                    object[] tileLocksCopy;
-                    int tilesXCopy, tilesYCopy;
-
-                    lock (TileLocksInitLock)
+                    for (int x = startX; x <= endX; x++)
                     {
-                        tileLocksCopy = TileLocks;
-                        tilesXCopy = TilesX;
-                        tilesYCopy = TilesY;
-                    }
-                    
-                    lock (tileLocksCopy[tileY * TilesX + tileX])
-                    {
-                        for (int y = startY; y <= endY; y++)
+                        // First check if the pixel center is inside the triangle
+                        float Bias = -0.5f; // Bias for pixel center
+                        bool centerInside = (w0 >= Bias && w1 >= Bias && w2 >= Bias) ||
+                                           (w0 <= Bias && w1 <= Bias && w2 <= Bias);
+
+                        if (centerInside)
                         {
-                            int w0 = w0Row;
-                            int w1 = w1Row;
-                            int w2 = w2Row;
+                            // Pixel center is inside - no MSAA needed
+                            float w0f = w0 * invArea;
+                            float w1f = w1 * invArea;
+                            float w2f = w2 * invArea;
 
-                            for (int x = startX; x <= endX; x++)
+                            float depth = depths[0] * w0f + depths[1] * w1f + depths[2] * w2f;
+                            float oldDepth = window.GetDepth(x, y);
+
+                            if (depthFunc(depth, oldDepth))
                             {
-                                if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
+                                var interpolated = Interpolate(outputs[0], outputs[1], outputs[2], w0f, w1f, w2f,
+                                    outputs[0].Interpolate);
+                                var sampleColor = fragmentShader(interpolated);
+
+                                if (sampleColor.HasValue && sampleColor.Value.W != 0)
                                 {
-                                    float w0f = w0 * invArea;
-                                    float w1f = w1 * invArea;
-                                    float w2f = w2 * invArea;
+                                    var dst = window.GetPixel(x, y);
+                                    var blended = Blend(sampleColor.Value, dst, blendMode);
+                                    window.SetPixel(x, y, blended);
+
+                                    if (depthTest != DepthTest.Disabled)
+                                    {
+                                        window.SetDepth(x, y, depth);
+                                    }
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // Pixel center is outside - perform MSAA
+                            Vector4 finalColor = Vector4.Zero;
+                            float finalDepth = 0f;
+                            int samplesCovered = 0;
+
+                            // Test each sample point
+                            for (int s = 0; s < samples; s++)
+                            {
+                                float sampleX = x + sampleOffsets[s].X * 2;
+                                float sampleY = y + sampleOffsets[s].Y * 2;
+
+                                // Calculate edge functions for sample point
+                                float w0s = a12 * (sampleX - vector4.X) + b12 * (sampleY - vector4.Y);
+                                float w1s = a20 * (sampleX - vector3.X) + b20 * (sampleY - vector3.Y);
+                                float w2s = a01 * (sampleX - vector2.X) + b01 * (sampleY - vector2.Y);
+
+                                if ((w0s >= Bias && w1s >= Bias && w2s >= Bias) ||
+                                    (w0s <= Bias && w1s <= Bias && w2s <= Bias))
+                                {
+                                    float w0f = w0s * invArea;
+                                    float w1f = w1s * invArea;
+                                    float w2f = w2s * invArea;
 
                                     float depth = depths[0] * w0f + depths[1] * w1f + depths[2] * w2f;
-
                                     float oldDepth = window.GetDepth(x, y);
+
                                     if (depthFunc(depth, oldDepth))
                                     {
-                                        var interpolated = Interpolate(outputs[0], outputs[1], outputs[2], w0f, w1f,
-                                            w2f, outputs[0].Interpolate);
-                                        var finalColor = fragmentShader(interpolated);
+                                        var interpolated = Interpolate(outputs[0], outputs[1], outputs[2], w0f, w1f, w2f,
+                                            outputs[0].Interpolate);
+                                        var sampleColor = fragmentShader(interpolated);
 
-                                        if (finalColor.HasValue && finalColor.Value.W != 0)
+                                        if (sampleColor.HasValue && sampleColor.Value.W != 0)
                                         {
-                                            var dst = window.GetPixel(x, y);
-                                            var blended = Blend(finalColor.Value, dst, blendMode);
-                                            window.SetPixel(x, y, blended);
-
-                                            if (depthTest != DepthTest.Disabled)
-                                                window.SetDepth(x, y, depth);
+                                            finalColor += sampleColor.Value;
+                                            finalDepth += depth;
+                                            samplesCovered++;
                                         }
                                     }
                                 }
-
-                                w0 += a12;
-                                w1 += a20;
-                                w2 += a01;
                             }
 
-                            w0Row += b12;
-                            w1Row += b20;
-                            w2Row += b01;
+                            if (samplesCovered > 0)
+                            {
+                                // Average the color and depth
+                                finalColor /= samplesCovered;
+                                finalDepth /= samplesCovered;
+
+                                var dst = window.GetPixel(x, y);
+                                var blended = Blend(finalColor, dst, blendMode);
+                                window.SetPixel(x, y, blended);
+
+                                if (depthTest != DepthTest.Disabled)
+                                {
+                                    window.SetDepth(x, y, finalDepth);
+                                }
+                            }
                         }
+
+                        w0 += a12;
+                        w1 += a20;
+                        w2 += a01;
                     }
+
+                    w0Row += b12;
+                    w1Row += b20;
+                    w2Row += b01;
                 }
-            });
+            }
         }
+    });
+}
 
         private static Func<float, float, bool> GetDepthTestFunction(DepthTest test)
         {
+            if (test == DepthTest.LessEqual)
+                return (newDepth, oldDepth) => newDepth >= oldDepth;
+
             return test switch
             {
                 DepthTest.Disabled => (newDepth, oldDepth) => true,
                 DepthTest.Less => (newDepth, oldDepth) => newDepth > oldDepth,
-                DepthTest.LessEqual => (newDepth, oldDepth) => newDepth >= oldDepth,
                 DepthTest.Greater => (newDepth, oldDepth) => newDepth < oldDepth,
                 DepthTest.GreaterEqual => (newDepth, oldDepth) => newDepth <= oldDepth,
                 DepthTest.Equal => (newDepth, oldDepth) => Math.Abs(newDepth - oldDepth) < Epsilon,
@@ -547,9 +730,9 @@ namespace SoftwareRenderer
             };
         }
 
-        private static float EdgeFunction(Vector2D<int> a, Vector2D<int> b, Vector2D<int> c) =>
+        private static float EdgeFunction(Vector2 a, Vector2 b, Vector2 c) =>
             (c.X - a.X) * (b.Y - a.Y) - (c.Y - a.Y) * (b.X - a.X);
-
+        
         public static Shaders.VertexOutput Interpolate(
             in Shaders.VertexOutput a,
             in Shaders.VertexOutput b,
@@ -572,9 +755,12 @@ namespace SoftwareRenderer
             float wb = (float)(w1Inv * w);
             float wc = (float)(w2Inv * w);
 
-            Vector4 clipPos = (a.ClipPosition * (float)w0Inv + b.ClipPosition * (float)w1Inv + c.ClipPosition * (float)w2Inv) * w;
-            Vector2 texCoord = (a.TexCoord * (float)w0Inv + b.TexCoord * (float)w1Inv + c.TexCoord * (float)(w2Inv)) * w;
-            Vector2 screenCoords = (a.ScreenCoords * (float)w0Inv + b.ScreenCoords * (float)w1Inv + c.ScreenCoords * (float)(w2Inv)) * w;
+            Vector4 clipPos = (a.ClipPosition * (float)w0Inv + b.ClipPosition * (float)w1Inv +
+                               c.ClipPosition * (float)w2Inv) * w;
+            Vector2 texCoord = (a.TexCoord * (float)w0Inv + b.TexCoord * (float)w1Inv + c.TexCoord * (float)(w2Inv)) *
+                               w;
+            Vector2 screenCoords = (a.ScreenCoords * (float)w0Inv + b.ScreenCoords * (float)w1Inv +
+                                    c.ScreenCoords * (float)(w2Inv)) * w;
 
             Vector3 normal = interpolate
                 ? Vector3.Normalize((a.Normal * (float)w0Inv + b.Normal * (float)w1Inv + c.Normal * (float)w2Inv) * w)

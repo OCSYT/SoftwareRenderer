@@ -6,14 +6,16 @@ namespace SoftwareRenderer
 {
     public class CharacterController
     {
-        private readonly object _checkPlaneLock = new();
-        private readonly object _moveWithSlideLock = new();
+        private readonly object CheckPlaneLock = new();
+        private readonly object MoveWithSlideLock = new();
 
         // Core Properties
         public Vector3 Position { get; set; }
         public Vector3 Velocity { get; private set; }
         public bool IsGrounded { get; private set; }
         public bool IsCeiling { get; private set; }
+
+        public bool IsNoClipEnabled { get; set; } = false;
 
         // Capsule Parameters
         public Vector3 Gravity { get; set; } = new(0, -14.0f, 0);
@@ -28,66 +30,121 @@ namespace SoftwareRenderer
         public float GroundFriction { get; set; } = 6.0f;
         public float AirControl { get; set; } = 0.2f;
         public Vector3 CamOffset { get; set; } = new(0.0f, 0.15f, 0.0f);
+
         // Environment
-        private readonly List<Mesh>[] _collisionModels;
-        private readonly Matrix4x4[] _modelMatrices;
+        private readonly List<Mesh>[] CollisionModels;
+        private readonly Matrix4x4[] ModelMatrices;
 
         public CharacterController(Vector3 initialPosition, List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices)
         {
             Position = initialPosition;
             Velocity = Vector3.Zero;
-            _collisionModels = collisionModels;
-            _modelMatrices = modelMatrices;
+            CollisionModels = collisionModels;
+            ModelMatrices = modelMatrices;
         }
 
-        public void Update(float deltaTime, Vector3 moveInput, bool jumpRequested)
+        private float JumpCooldownTimer = 0f;
+        private const float JumpCooldownDuration = 0.2f;
+
+        public void Update(float DeltaTime, Vector3 MoveInput, bool JumpRequested)
         {
-            Velocity += Gravity * deltaTime;
-
-            Vector3 wishDir = moveInput;
-            float wishSpeed = wishDir.Length();
-            if (wishSpeed > 1f) wishDir /= wishSpeed;
-            wishSpeed *= MoveSpeed;
-
-            if (IsGrounded)
+            if (IsNoClipEnabled)
             {
-                ApplyFriction(deltaTime);
-                GroundAccelerate(wishDir, wishSpeed, deltaTime);
-            }
-            else
-            {
-                AirAccelerate(wishDir, wishSpeed, deltaTime);
-                AirControlFunc(wishDir, deltaTime);
-                ClampAirSpeed();
+                // Direct movement ignoring physics and collisions
+                Vector3 Dir = MoveInput;
+                float InputMagnitude = Dir.Length();
+                if (InputMagnitude > 1f) Dir /= InputMagnitude;
+                Velocity = Dir * MoveSpeed;
+                Position += Velocity * DeltaTime;
+                return;
             }
 
-            if (jumpRequested && IsGrounded)
+            MoveInput.Y = 0;
+
+            // Apply gravity
+            Velocity += Gravity * DeltaTime;
+
+            // Decrease jump cooldown timer
+            if (JumpCooldownTimer > 0f)
+            {
+                JumpCooldownTimer -= DeltaTime;
+            }
+
+            // Handle jump input
+            if (JumpRequested && IsGrounded && JumpCooldownTimer <= 0f)
             {
                 Velocity = new Vector3(Velocity.X, JumpForce, Velocity.Z);
                 IsGrounded = false;
+                JumpCooldownTimer = JumpCooldownDuration;
             }
 
-            Vector3 movement = Velocity * deltaTime;
-            Vector3 moveXZ = new(movement.X, 0, movement.Z);
-            Vector3 moveY = new(0, movement.Y, 0);
+            // Ground check
+            IsGrounded = CheckPlane(Position, CollisionModels, ModelMatrices, -1, out var GroundPoint,
+                out var GroundNormal, Velocity, DeltaTime);
 
-            Position = MoveWithSlide(Position, Position + moveXZ, Radius + 0.001f, 0, _collisionModels, _modelMatrices);
-            Position = MoveWithSlide(Position, Position + moveY, Radius + 0.001f, 0, _collisionModels, _modelMatrices);
+            Vector3 Movement = Velocity * DeltaTime;
+            Vector3 MoveXZ = ProjectOnPlane(new Vector3(Movement.X, 0, Movement.Z), GroundNormal);
 
-            IsGrounded = CheckPlane(_collisionModels, _modelMatrices, -1, out var groundPoint);
+            // Ceiling check
+            IsCeiling = CheckPlane(Position, CollisionModels, ModelMatrices, 1, out _, out _, Velocity, DeltaTime);
 
-            if (IsGrounded && groundPoint != Vector3.NegativeInfinity)
+            // Ground response
+            if (IsGrounded && GroundPoint != Vector3.NegativeInfinity)
             {
-                Position = Position with { Y = groundPoint.Y + Height * 0.5f };
+                Vector3 NewPosition = Position with { Y = GroundPoint.Y + Height * 0.5f };
+                Position = MoveWithSlide(Position, NewPosition, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
+
                 if (Velocity.Y < 0)
+                {
                     Velocity = new Vector3(Velocity.X, 0, Velocity.Z);
+                }
             }
 
-            IsCeiling = CheckPlane(_collisionModels, _modelMatrices, 1, out _);
+            // Ceiling response
             if (IsCeiling && Velocity.Y > 0)
             {
                 Velocity = new Vector3(Velocity.X, 0, Velocity.Z);
+                JumpCooldownTimer = 0;
             }
+
+            // Horizontal slide movement
+            Position = MoveWithSlide(Position, Position + MoveXZ, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
+
+            // Vertical movement
+            Position += new Vector3(0, Velocity.Y, 0) * DeltaTime;
+
+            // Handle input acceleration
+            Vector3 WishDir = ProjectOnPlane(MoveInput, GroundNormal);
+            float WishSpeed = WishDir.Length();
+            if (WishSpeed > 1f) WishDir /= WishSpeed;
+            WishSpeed *= MoveSpeed;
+
+            if (IsGrounded)
+            {
+                ApplyFriction(DeltaTime);
+                GroundAccelerate(WishDir, WishSpeed, DeltaTime);
+            }
+            else
+            {
+                AirAccelerate(WishDir, WishSpeed, DeltaTime);
+                AirControlFunc(WishDir, DeltaTime);
+                ClampAirSpeed();
+            }
+        }
+
+        public static Vector3 ProjectOnPlane(Vector3 vector, Vector3 planeNormal)
+        {
+            float normalLengthSqr = planeNormal.X * planeNormal.X + planeNormal.Y * planeNormal.Y +
+                                    planeNormal.Z * planeNormal.Z;
+            if (normalLengthSqr < 1e-6f) return vector; // Return original vector if normal is invalid
+
+            // Project: v - (v · n) * n (assuming planeNormal is normalized or close enough)
+            float dot = vector.X * planeNormal.X + vector.Y * planeNormal.Y + vector.Z * planeNormal.Z;
+            return new Vector3(
+                vector.X - dot * planeNormal.X / normalLengthSqr,
+                vector.Y - dot * planeNormal.Y / normalLengthSqr,
+                vector.Z - dot * planeNormal.Z / normalLengthSqr
+            );
         }
 
         private void ApplyFriction(float deltaTime)
@@ -161,10 +218,15 @@ namespace SoftwareRenderer
             Velocity += new Vector3(wishDir.X * k, 0, wishDir.Z * k);
         }
 
-        private bool CheckPlane(List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices, float direction,
-            out Vector3 point)
+        private bool CheckPlane(Vector3 pos, List<Mesh>[] collisionModels, Matrix4x4[] modelMatrices, float direction,
+            out Vector3 point, out Vector3 normal, Vector3 velocity, float deltaTime)
         {
-            Vector3[] Offsets =
+            point = Vector3.NegativeInfinity;
+            normal = Vector3.UnitY;
+            if (collisionModels == null || modelMatrices == null || collisionModels.Length != modelMatrices.Length)
+                return false;
+
+            Vector3[] offsets =
             {
                 new Vector3(0, 0, 0),
                 new Vector3(-1, 0, 0),
@@ -177,59 +239,64 @@ namespace SoftwareRenderer
                 new Vector3(1, 0, 1)
             };
 
+            Vector3 bestHitPoint = Vector3.NegativeInfinity;
+            Vector3 bestNormal = Vector3.UnitY;
+            float bestDistance = float.MaxValue;
+            bool anyHit = false;
 
-            bool hit = false;
-            Vector3 hitPoint = Vector3.NegativeInfinity;
+            object hitLock = new();
 
-            if (collisionModels != null && modelMatrices != null && collisionModels.Length == modelMatrices.Length)
+            Vector3 frameStart = pos;
+            Vector3 frameEnd = pos + new Vector3(0, velocity.Y, 0) * deltaTime;
+            float maxDistance = MathF.Abs(frameEnd.Y - frameStart.Y) + (Height);
+
+            Parallel.ForEach(offsets, offset =>
             {
-                Parallel.For(0, Offsets.Length, j =>
+                Vector3 safeOffset =
+                    offset == Vector3.Zero ? Vector3.Zero : Vector3.Normalize(offset) * (Radius - 0.01f);
+                Vector3 heightOffset = Vector3.UnitY * direction * (Height / 2f);
+
+                Vector3 rayStart = frameStart + safeOffset - heightOffset;
+                Vector3 rayEnd = frameEnd + safeOffset + heightOffset;
+                Vector3 rayDir = rayEnd - rayStart;
+
+                if (rayDir.LengthSquared() < 0.0001f)
+                    return;
+
+                Vector3 normRayDir = Vector3.Normalize(rayDir);
+
+                for (int i = 0; i < collisionModels.Length; i++)
                 {
-                    for (int i = 0; i < collisionModels.Length; i++)
+                    var model = collisionModels[i];
+                    var matrix = modelMatrices[i];
+
+                    foreach (var mesh in model)
                     {
-                        var model = collisionModels[i];
-                        var modelMatrix = modelMatrices[i];
-
-                        Vector3 offset = Vector3.Normalize(Offsets[j]) * (Radius - 0.01f);
-                        Vector3 basePosition = Position + offset;
-
-                        Vector3 rayStart = basePosition;
-                        Vector3 rayEnd = basePosition + (Vector3.UnitY * direction * Height);
-                        Parallel.ForEach(model, mesh =>
+                        if (Physics.Raycast(rayStart, normRayDir, mesh.Vertices.ToArray(), mesh.Indices.ToArray(),
+                                matrix, out float hitDistance, out var hitPos, out var hitNormal))
                         {
-                            lock (_checkPlaneLock)
+                            if (hitDistance <= maxDistance)
                             {
-                                Vector3 rayDir = rayEnd - rayStart;
-                                if (rayDir.LengthSquared() > 0 &&
-                                    Physics.Raycast(rayStart, Vector3.Normalize(rayDir),
-                                        mesh.Vertices.ToArray(), mesh.Indices.ToArray(), modelMatrix,
-                                        out float hitDistance, out var currentHitPoint, out _))
+                                lock (hitLock)
                                 {
-                                    if (hitDistance <= (Height * 0.5f))
+                                    if (hitDistance < bestDistance)
                                     {
-                                        lock (_checkPlaneLock)
-                                        {
-                                            if (!hit || hitDistance < Vector3.Distance(rayStart, hitPoint))
-                                            {
-                                                hitPoint = currentHitPoint;
-                                                hit = true;
-                                            }
-                                        }
+                                        bestDistance = hitDistance;
+                                        bestHitPoint = hitPos;
+                                        bestNormal = hitNormal;
+                                        anyHit = true;
                                     }
                                 }
                             }
-                        });
-
-                        if (hit) break;
+                        }
                     }
-                });
-            }
+                }
+            });
 
-            point = hitPoint;
-            return hit;
+            point = bestHitPoint;
+            normal = bestNormal;
+            return anyHit;
         }
-
-
 
         private Vector3 MoveWithSlide(Vector3 currentPos, Vector3 desiredPos, float radius, int depth,
             List<Mesh>[] sceneModels = null, Matrix4x4[] modelMatrices = null)
@@ -237,7 +304,8 @@ namespace SoftwareRenderer
             const int MaxSlideAttempts = 3;
             const float SkinWidth = 0.01f;
 
-            if (depth >= MaxSlideAttempts || sceneModels == null || modelMatrices == null || sceneModels.Length != modelMatrices.Length)
+            if (depth >= MaxSlideAttempts || sceneModels == null || modelMatrices == null ||
+                sceneModels.Length != modelMatrices.Length)
                 return currentPos;
 
             Vector3 moveVector = desiredPos - currentPos;
@@ -250,7 +318,7 @@ namespace SoftwareRenderer
 
             float capsuleHalfHeight = Height * 0.5f;
             int verticalSteps = Math.Max(1, (int)(Height / (radius * 2)));
-            int horizontalRays = Math.Max(3, (int)(2 * MathF.PI * radius / 0.1f));
+            int horizontalRays = Math.Max(3, (int)(4 * MathF.PI * radius / 0.1f));
 
             for (int i = 0; i < sceneModels.Length; i++)
             {
@@ -265,7 +333,8 @@ namespace SoftwareRenderer
                     for (int vStep = 0; vStep <= verticalSteps; vStep++)
                     {
                         float bottomLimit = -capsuleHalfHeight + StepSize;
-                        float heightOffset = float.Lerp(bottomLimit, capsuleHalfHeight, vStep / (float)Math.Max(1, verticalSteps));
+                        float heightOffset = float.Lerp(bottomLimit, capsuleHalfHeight,
+                            vStep / (float)Math.Max(1, verticalSteps));
 
                         for (int hStep = 0; hStep < horizontalRays; hStep++)
                         {
@@ -279,9 +348,9 @@ namespace SoftwareRenderer
                             Vector3 rayOrigin = currentPos + new Vector3(0, heightOffset, 0) + horizontalOffset;
 
                             if (Physics.Raycast(rayOrigin, direction, vertices, indices, modelMatrix,
-                                out float hitDistance, out _, out Vector3 normal))
+                                    out float hitDistance, out _, out Vector3 normal))
                             {
-                                lock (_moveWithSlideLock)
+                                lock (MoveWithSlideLock)
                                 {
                                     if (hitDistance < nearestHitDistance)
                                     {

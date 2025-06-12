@@ -1,4 +1,3 @@
-using Silk.NET.Maths;
 using System.Numerics;
 using System.Collections.Generic;
 
@@ -53,7 +52,43 @@ namespace SoftwareRenderer
             Vector2 texCoord = Vector2.Lerp(a.TexCoord, b.TexCoord, t);
             Vector3 normal = interpolate ? Vector3.Normalize(Vector3.Lerp(a.Normal, b.Normal, t)) : a.Normal;
 
-            Dictionary<string, object>? data = a.Data != null ? new Dictionary<string, object>(a.Data) : null;
+            Dictionary<string, object>? data = null;
+            if (interpolate)
+            {
+
+                if (a.Data != null && b.Data != null)
+                {
+                    data = new Dictionary<string, object>();
+
+                    foreach (var kvp in a.Data)
+                    {
+                        if (!b.Data.TryGetValue(kvp.Key, out var bValue))
+                            continue;
+
+                        var aValue = kvp.Value;
+
+                        object? result = interpolate switch
+                        {
+                            true when aValue is float af && bValue is float bf => af * (1 - t) + bf * t,
+                            true when aValue is Vector2 av2 && bValue is Vector2 bv2 => Vector2.Lerp(av2, bv2, t),
+                            true when aValue is Vector3 av3 && bValue is Vector3 bv3 => Vector3.Lerp(av3, bv3, t),
+                            true when aValue is Vector4 av4 && bValue is Vector4 bv4 => Vector4.Lerp(av4, bv4, t),
+                            _ => aValue
+                        };
+
+                        data[kvp.Key] = result!;
+                    }
+                }
+                else if (a.Data != null)
+                {
+                    data = new Dictionary<string, object>(a.Data);
+                }
+            }
+            else
+            {
+                data = a.Data;
+            }
+            
 
             return new VertexOutput
             {
@@ -67,6 +102,16 @@ namespace SoftwareRenderer
                 Barycentric = Vector3.Zero,
             };
         }
+        public static VertexOutput Lerp3(VertexOutput a, VertexOutput b, VertexOutput c, Vector3 t, bool interpolate)
+        {
+            VertexOutput ab = Lerp(a, b, t.Y / (t.X + t.Y + float.Epsilon), interpolate);
+            VertexOutput ac = Lerp(a, c, t.Z / (t.X + t.Z + float.Epsilon), interpolate);
+            
+            float total = t.Y + t.Z;
+            float lerpT = total > 0 ? t.Z / total : 0;
+            return Lerp(ab, ac, lerpT, interpolate);
+        }
+
 
         public delegate VertexOutput VertexShader(VertexInput input, Matrix4x4 model, Matrix4x4 view, Matrix4x4 projection);
         public delegate Vector4? FragmentShader(VertexOutput input);

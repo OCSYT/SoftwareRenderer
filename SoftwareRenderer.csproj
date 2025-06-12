@@ -9,6 +9,7 @@
         <SignAssembly>true</SignAssembly>
         <AssemblyOriginatorKeyFile>Renderer.snk</AssemblyOriginatorKeyFile>
         <PublicSign>true</PublicSign>
+        <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     </PropertyGroup>
 
     <ItemGroup>
@@ -16,16 +17,11 @@
       <PackageReference Include="ENet-CSharp" Version="2.4.8" />
       <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
       <PackageReference Include="Mono.Nat" Version="3.0.4" />
+      <PackageReference Include="NAudio" Version="2.2.1" />
+      <PackageReference Include="NetCoreAudio" Version="2.0.0" />
       <PackageReference Include="Open.NAT" Version="2.1.0" />
       <PackageReference Include="Silk.NET" Version="2.22.0" />
-      <PackageReference Include="Silk.NET.Core" Version="2.22.0" />
-      <PackageReference Include="Silk.NET.GLFW" Version="2.22.0" />
-      <PackageReference Include="Silk.NET.Maths" Version="2.22.0" />
-      <PackageReference Include="Silk.NET.OpenGL" Version="2.22.0" />
       <PackageReference Include="Silk.NET.OpenGL.Extensions.ImGui" Version="2.22.0" />
-      <PackageReference Include="Silk.NET.Windowing" Version="2.22.0" />
-      <PackageReference Include="Silk.NET.Windowing.Common" Version="2.22.0" />
-      <PackageReference Include="Silk.NET.Windowing.Glfw" Version="2.22.0" />
       <PackageReference Include="SixLabors.ImageSharp" Version="3.1.8" />
       <PackageReference Include="Steamworks.NET" Version="2024.8.0" />
     </ItemGroup>
