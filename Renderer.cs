@@ -564,7 +564,7 @@ namespace SoftwareRenderer
                 ImGui.SetNextWindowPos(screenPos, ImGuiCond.Always, new Vector2(0.5f, 1f));
                 ImGui.SetNextWindowBgAlpha(0.35f);
 
-                if (ImGui.Begin($"###Nametag_{player.Id}",
+                if (ImGui.Begin($"###Nametag_{player.Name}",
                         ImGuiWindowFlags.NoDecoration |
                         ImGuiWindowFlags.AlwaysAutoResize |
                         ImGuiWindowFlags.NoSavedSettings |
