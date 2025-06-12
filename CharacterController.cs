@@ -22,6 +22,7 @@ namespace SoftwareRenderer
         public float Height { get; set; } = 0.5f;
         public float Radius { get; set; } = 0.15f;
         public float StepSize { get; set; } = 0.3f;
+        private float ActualStepSize = 0.03f;
         public float MoveSpeed { get; set; } = 5.0f;
         public float JumpForce { get; set; } = 4f;
         public float GroundAcceleration { get; set; } = 3.5f;
@@ -44,7 +45,7 @@ namespace SoftwareRenderer
         }
 
         private float JumpCooldownTimer = 0f;
-        private const float JumpCooldownDuration = 0.2f;
+        private const float JumpCooldownDuration = 0.25f;
 
         public void Update(float DeltaTime, Vector3 MoveInput, bool JumpRequested)
         {
@@ -89,7 +90,7 @@ namespace SoftwareRenderer
             IsCeiling = CheckPlane(Position, CollisionModels, ModelMatrices, 1, out _, out _, Velocity, DeltaTime);
 
             // Ground response
-            if (IsGrounded && GroundPoint != Vector3.NegativeInfinity)
+            if (IsGrounded && GroundPoint != Vector3.NegativeInfinity && JumpCooldownTimer <= 0f)
             {
                 Vector3 NewPosition = Position with { Y = GroundPoint.Y + Height * 0.5f };
                 Position = MoveWithSlide(Position, NewPosition, Radius + 0.001f, 0, CollisionModels, ModelMatrices);
@@ -98,6 +99,12 @@ namespace SoftwareRenderer
                 {
                     Velocity = new Vector3(Velocity.X, 0, Velocity.Z);
                 }
+
+                ActualStepSize = StepSize;
+            }
+            else
+            {
+                ActualStepSize = 0;
             }
 
             // Ceiling response
@@ -254,7 +261,7 @@ namespace SoftwareRenderer
             {
                 Vector3 safeOffset =
                     offset == Vector3.Zero ? Vector3.Zero : Vector3.Normalize(offset) * (Radius - 0.01f);
-                Vector3 heightOffset = Vector3.UnitY * direction * (Height / 2f);
+                Vector3 heightOffset = Vector3.UnitY * direction * ((Height / 2f) - 0.01f);
 
                 Vector3 rayStart = frameStart + safeOffset - heightOffset;
                 Vector3 rayEnd = frameEnd + safeOffset + heightOffset;
@@ -302,7 +309,7 @@ namespace SoftwareRenderer
             List<Mesh>[] sceneModels = null, Matrix4x4[] modelMatrices = null)
         {
             const int MaxSlideAttempts = 3;
-            const float SkinWidth = 0.01f;
+            const float SkinWidth = 0.001f;
 
             if (depth >= MaxSlideAttempts || sceneModels == null || modelMatrices == null ||
                 sceneModels.Length != modelMatrices.Length)
@@ -318,7 +325,7 @@ namespace SoftwareRenderer
 
             float capsuleHalfHeight = Height * 0.5f;
             int verticalSteps = Math.Max(1, (int)(Height / (radius * 2)));
-            int horizontalRays = Math.Max(3, (int)(4 * MathF.PI * radius / 0.1f));
+            int horizontalRays = Math.Max(4, (int)(4 * MathF.PI * radius / 0.1f));
 
             for (int i = 0; i < sceneModels.Length; i++)
             {
@@ -332,7 +339,7 @@ namespace SoftwareRenderer
 
                     for (int vStep = 0; vStep <= verticalSteps; vStep++)
                     {
-                        float bottomLimit = -capsuleHalfHeight + StepSize;
+                        float bottomLimit = -capsuleHalfHeight + ActualStepSize;
                         float heightOffset = float.Lerp(bottomLimit, capsuleHalfHeight,
                             vStep / (float)Math.Max(1, verticalSteps));
 

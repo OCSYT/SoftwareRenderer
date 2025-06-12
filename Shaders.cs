@@ -47,48 +47,43 @@ namespace SoftwareRenderer
 
         public static VertexOutput Lerp(VertexOutput a, VertexOutput b, float t, bool interpolate)
         {
+            // Pre-compute interpolated values
             Vector4 clipPos = Vector4.Lerp(a.ClipPosition, b.ClipPosition, t);
-            Vector4 color = interpolate ? Vector4.Lerp(a.Color, b.Color, t) : a.Color;
             Vector2 texCoord = Vector2.Lerp(a.TexCoord, b.TexCoord, t);
-            Vector3 normal = interpolate ? Vector3.Normalize(Vector3.Lerp(a.Normal, b.Normal, t)) : a.Normal;
+    
+            // Avoid branching for Color and Normal when possible
+            Vector4 color = interpolate ? Vector4.Lerp(a.Color, b.Color, t) : a.Color;
+            Vector3 normal = interpolate ? Vector3.Lerp(a.Normal, b.Normal, t) : a.Normal;
 
-            Dictionary<string, object>? data = null;
-            if (interpolate)
+            // Early exit for non-interpolated data
+            Dictionary<string, object>? data = interpolate ? null : a.Data;
+
+            if (interpolate && a.Data != null && b.Data != null)
             {
-
-                if (a.Data != null && b.Data != null)
+                data = new Dictionary<string, object>(Math.Min(a.Data.Count, b.Data.Count));
+        
+                foreach (var kvp in a.Data)
                 {
-                    data = new Dictionary<string, object>();
+                    if (!b.Data.TryGetValue(kvp.Key, out var bValue))
+                        continue;
 
-                    foreach (var kvp in a.Data)
+                    var aValue = kvp.Value;
+                    object result = aValue switch
                     {
-                        if (!b.Data.TryGetValue(kvp.Key, out var bValue))
-                            continue;
+                        float af when bValue is float bf => af * (1 - t) + bf * t,
+                        Vector2 av2 when bValue is Vector2 bv2 => Vector2.Lerp(av2, bv2, t),
+                        Vector3 av3 when bValue is Vector3 bv3 => Vector3.Lerp(av3, bv3, t),
+                        Vector4 av4 when bValue is Vector4 bv4 => Vector4.Lerp(av4, bv4, t),
+                        _ => aValue
+                    };
 
-                        var aValue = kvp.Value;
-
-                        object? result = interpolate switch
-                        {
-                            true when aValue is float af && bValue is float bf => af * (1 - t) + bf * t,
-                            true when aValue is Vector2 av2 && bValue is Vector2 bv2 => Vector2.Lerp(av2, bv2, t),
-                            true when aValue is Vector3 av3 && bValue is Vector3 bv3 => Vector3.Lerp(av3, bv3, t),
-                            true when aValue is Vector4 av4 && bValue is Vector4 bv4 => Vector4.Lerp(av4, bv4, t),
-                            _ => aValue
-                        };
-
-                        data[kvp.Key] = result!;
-                    }
-                }
-                else if (a.Data != null)
-                {
-                    data = new Dictionary<string, object>(a.Data);
+                    data[kvp.Key] = result;
                 }
             }
-            else
+            else if (interpolate && a.Data != null)
             {
-                data = a.Data;
+                data = new Dictionary<string, object>(a.Data);
             }
-            
 
             return new VertexOutput
             {
@@ -99,7 +94,7 @@ namespace SoftwareRenderer
                 Data = data,
                 ScreenCoords = Vector2.Zero,
                 Interpolate = interpolate,
-                Barycentric = Vector3.Zero,
+                Barycentric = Vector3.Zero
             };
         }
         public static VertexOutput Lerp3(VertexOutput a, VertexOutput b, VertexOutput c, Vector3 t, bool interpolate)

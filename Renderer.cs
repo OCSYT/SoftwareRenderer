@@ -6,8 +6,7 @@ using System.Threading.Tasks;
 using Silk.NET.Input;
 using Silk.NET.OpenGL.Extensions.ImGui;
 using ImGuiNET;
-using NAudio.Wave;
-using NetCoreAudio;
+using SDL2;
 
 namespace SoftwareRenderer
 {
@@ -38,7 +37,7 @@ namespace SoftwareRenderer
         private Quaternion Recoil = Quaternion.Identity;
         private float Time;
         private float FogStart = 1f;
-        private float FogEnd = 10f;
+        private float FogEnd = 25f;
         private Vector4 FogColor = new Vector4(1f, 0.62f, 0.5f, 1f);
         private Vector3 LightEulerDegrees = new(-45, -45, 0);
         private Vector3 LightDirection = EulerToDirection(new(-45, -45, 0));
@@ -92,19 +91,19 @@ namespace SoftwareRenderer
                     PlayerName = File.ReadAllText(filePath).Trim();
                     if (string.IsNullOrWhiteSpace(PlayerName))
                     {
-                        PlayerName = $"Player_{NetworkManager.ClientId}";
+                        PlayerName = $"Player {NetworkManager.ClientId}";
                         Console.WriteLine($"Warning: {filePath} is empty. Using default name: {PlayerName}");
                     }
                 }
                 else
                 {
-                    PlayerName = $"Player_{NetworkManager.ClientId}";
+                    PlayerName = $"Player {NetworkManager.ClientId}";
                     Console.WriteLine($"Warning: {filePath} not found. Using default name: {PlayerName}");
                 }
             }
             catch (Exception ex)
             {
-                PlayerName = $"Player_{NetworkManager.ClientId}";
+                PlayerName = $"Player {NetworkManager.ClientId}";
                 Console.WriteLine($"Error reading {filePath}: {ex.Message}. Using default name: {PlayerName}");
             }
         }
@@ -394,7 +393,7 @@ namespace SoftwareRenderer
             WasEscapePressed = isEscapePressed;
 
             bool isVPressed = Keyboard.IsKeyPressed(Key.V);
-            if (isVPressed && !WasVPressed)
+            if (isVPressed && !WasVPressed && !IsChatInputActive)
             {
                 CharacterController.IsNoClipEnabled = !CharacterController.IsNoClipEnabled;
             }
@@ -571,7 +570,7 @@ namespace SoftwareRenderer
                         ImGuiWindowFlags.NoFocusOnAppearing |
                         ImGuiWindowFlags.NoNav))
                 {
-                    ImGui.Text($"Player {player.Name} - Health: {player.Health:F0}");
+                    ImGui.Text($"{player.Name} - Health: {player.Health:F0}");
                     ImGui.End();
                 }
             }
@@ -674,6 +673,7 @@ namespace SoftwareRenderer
                 foreach (var player in Players)
                 {
                     ImGui.Text($"Player ID: {player.Id}");
+                    ImGui.Text($"Player Name: {player.Name}");
                     ImGui.Text($"Position: {player.Position}");
                     ImGui.Text($"Rotation: {player.Rotation}");
                 }
@@ -833,6 +833,7 @@ namespace SoftwareRenderer
                 Data = { ["WorldNormal"] = worldNormal },
                 TexCoord = vertex.TexCoord,
                 Color = vertex.Color,
+                Normal = vertex.Normal,
                 Interpolate = true
             };
         }
@@ -859,7 +860,8 @@ namespace SoftwareRenderer
             {
                 switch (method)
                 {
-                    case "ConnectedPlayer" when parameters.Length >= 2 && int.TryParse(parameters[0], out int newPlayerId):
+                    case "ConnectedPlayer"
+                        when parameters.Length >= 2 && int.TryParse(parameters[0], out int newPlayerId):
                         Players.Add(new ConnectedPlayer { Id = newPlayerId, Name = parameters[1], Health = 100f });
                         ChatMessages.Add($"{parameters[1]} has joined the game!");
                         ScrollToBottom = true;
@@ -879,15 +881,18 @@ namespace SoftwareRenderer
                                 float.Parse(parameters[6]),
                                 float.Parse(parameters[7]));
                         }
+
                         break;
 
-                    case "DisconnectedPlayer" when parameters.Length >= 1 && int.TryParse(parameters[0], out int disconnectedId):
+                    case "DisconnectedPlayer"
+                        when parameters.Length >= 1 && int.TryParse(parameters[0], out int disconnectedId):
                         var disconnectedPlayer = Players.Find(p => p.Id == disconnectedId);
                         if (disconnectedPlayer != null)
                         {
                             Players.Remove(disconnectedPlayer);
                             Console.WriteLine($"Player disconnected: {disconnectedPlayer.Name}");
                         }
+
                         break;
 
                     case "ChatMessage" when parameters.Length >= 2:
@@ -895,14 +900,15 @@ namespace SoftwareRenderer
                         ScrollToBottom = true;
                         break;
 
-                    case "PlayerHit" when parameters.Length >= 3 && int.TryParse(parameters[0], out int hitPlayerId) && float.TryParse(parameters[2], out float damage):
+                    case "PlayerHit" when parameters.Length >= 3 && int.TryParse(parameters[0], out int hitPlayerId) &&
+                                          float.TryParse(parameters[2], out float damage):
                         var hitPlayer = Players.Find(p => p.Id == hitPlayerId);
                         if (hitPlayer != null)
                         {
                             hitPlayer.Health = Math.Max(0f, hitPlayer.Health - damage);
                             if (hitPlayer.Health <= 0f)
                             {
-                                ChatMessages.Add($"Player {hitPlayerId} was killed!");
+                                ChatMessages.Add($"Player {hitPlayer.Name} was killed!");
                                 if (NetworkManager.ClientId == hitPlayerId && CharacterController != null)
                                 {
                                     Random random = new Random();
@@ -911,10 +917,13 @@ namespace SoftwareRenderer
                                     bool spawnAtFirst = randomValue > 0.5;
 
                                     Vector3 spawnPos = spawnAtFirst ? SpawnPosition : SpawnPosition2;
-                                    Quaternion cameraRotation = spawnAtFirst ? Quaternion.Identity : Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI);
+                                    Quaternion cameraRotation = spawnAtFirst
+                                        ? Quaternion.Identity
+                                        : Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI);
                                     CharacterController.Position = spawnPos;
                                     Camera.Rotation = cameraRotation;
                                 }
+
                                 hitPlayer.Health = 100f;
                                 NetworkManager.SendRPC("Update", new[]
                                 {
@@ -928,8 +937,10 @@ namespace SoftwareRenderer
                                     hitPlayer.Rotation.W.ToString()
                                 });
                             }
+
                             ScrollToBottom = true;
                         }
+
                         break;
                     case "Shoot":
                         Console.WriteLine("Shot sound");
@@ -938,14 +949,73 @@ namespace SoftwareRenderer
                             float.Parse(parameters[1]),
                             float.Parse(parameters[2]));
                         float Distance = Vector3.Distance(Camera.Position, Position);
-                        byte Volume = (byte)(25 / (0.25f  * Distance));
-                        string FilePath = "./Assets/pistol.wav"; 
-                        var AudioPlayer = new Player();
-                        AudioPlayer.SetVolume(Volume);
-                        AudioPlayer.Play(FilePath);
+                        float Volume = Math.Clamp(25f / (0.25f * Distance), 0f, 100f); // SFML style volume 0-100
+                        string FilePath = "./Assets/pistol.wav";
+
+                        try
+                        {
+                            if (SDL.SDL_Init(SDL.SDL_INIT_AUDIO) != 0)
+                            {
+                                Console.WriteLine("SDL_Init Error: " + SDL.SDL_GetError());
+                                return;
+                            }
+
+                            if (SDL.SDL_LoadWAV(FilePath, out var Spec, out var AudioBuf, out var AudioLen) == IntPtr.Zero)
+                            {
+                                Console.WriteLine("Could not load WAV file.");
+                                return;
+                            }
+
+                            AdjustVolume(AudioBuf, AudioLen, Volume / 100f);
+
+                            Spec.callback = null; // No callback, we use SDL_QueueAudio
+                            Spec.userdata = IntPtr.Zero;
+
+                            var DeviceId = SDL.SDL_OpenAudioDevice(null, 0, ref Spec, out _, 0);
+                            if (DeviceId == 0)
+                            {
+                                Console.WriteLine("Failed to open audio device.");
+                                SDL.SDL_FreeWAV(AudioBuf);
+                                return;
+                            }
+
+                            SDL.SDL_QueueAudio(DeviceId, AudioBuf, AudioLen);
+                            SDL.SDL_PauseAudioDevice(DeviceId, 0);
+                            int sampleRate = Spec.freq;
+                            int channels = Spec.channels;
+                            int bytesPerSample = Spec.format == SDL.AUDIO_S16SYS ? 1 : 2;
+                            int durationMs = (int)((AudioLen / (sampleRate * channels * bytesPerSample)) * 1000);
+                            async Task CleanUp()
+                            {
+                                await Task.Delay(durationMs); 
+                                SDL.SDL_CloseAudioDevice(DeviceId);
+                                SDL.SDL_FreeWAV(AudioBuf);
+                                SDL.SDL_CloseAudioDevice(DeviceId);
+                            }
+
+                            CleanUp();
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Failed to play sound: {ex.Message}");
+                        }
                         break;
                 }
             };
+        }
+        
+        unsafe void AdjustVolume(IntPtr buffer, uint length, float volume)
+        {
+            short* samples = (short*)buffer;
+            int sampleCount = (int)(length / 2); // 2 bytes per sample (16-bit)
+            for (int i = 0; i < sampleCount; i++)
+            {
+                int sample = (int)(samples[i] * volume);
+                // Clamp to short range
+                if (sample > short.MaxValue) sample = short.MaxValue;
+                if (sample < short.MinValue) sample = short.MinValue;
+                samples[i] = (short)sample;
+            }
         }
 
         private static Vector3 EulerToDirection(Vector3 eulerDegrees)

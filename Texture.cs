@@ -54,19 +54,22 @@ namespace SoftwareRenderer
                 int width = image.Width;
                 int height = image.Height;
                 byte[] data = new byte[width * height * 4]; // 4 bytes per pixel (RGBA)
-
-                for (int y = 0; y < height; y++)
+                Task.Run(() =>
                 {
-                    for (int x = 0; x < width; x++)
+                    for (int y = 0; y < height; y++)
                     {
-                        Rgba32 pixel = image[x, y];
-                        int index = (y * width + x) * 4;
-                        data[index] = pixel.R;
-                        data[index + 1] = pixel.G;
-                        data[index + 2] = pixel.B;
-                        data[index + 3] = pixel.A;
+                        for (int x = 0; x < width; x++)
+                        {
+                            Rgba32 pixel = image[x, y];
+                            int index = (y * width + x) * 4;
+                            data[index] = pixel.R;
+                            data[index + 1] = pixel.G;
+                            data[index + 2] = pixel.B;
+                            data[index + 3] = pixel.A;
+                        }
                     }
-                }
+                }).Wait();
+                
                 Console.WriteLine("Loaded Texture: " + FinalPath);
                 return new Texture(data, width, height);
             }
