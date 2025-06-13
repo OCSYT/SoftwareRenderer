@@ -307,7 +307,7 @@ namespace SoftwareRenderer
         public static void RenderMesh(
             MainWindow window,
             Shaders.VertexInput[] vertices,
-            int[] indices,
+            ushort[] indices,
             Matrix4x4 model,
             Matrix4x4 view,
             Matrix4x4 projection,

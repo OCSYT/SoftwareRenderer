@@ -56,7 +56,7 @@ namespace SoftwareRenderer
         private bool IsChatInputActive;
         private bool ScrollToBottom;
         private float LastShotTime;
-        private float ShotCooldown = 0.1f;
+        private float ShotCooldown = 0.25f;
         private string PlayerName = "Player"; // Default name if file reading fails
         
         private class ConnectedPlayer
@@ -817,12 +817,11 @@ namespace SoftwareRenderer
 
             ImGui.End();
         }
-
         private Texture LoadTexture(Mesh mesh)
         {
             if (mesh?.Material?.TexturePaths?.TryGetValue(TextureSlot.Diffuse, out var texturePath) == true)
             {
-                return CachedTextures.GetOrAdd(texturePath, SoftwareRenderer.Texture.LoadTexture);
+                return CachedTextures.GetOrAdd(texturePath, path => Texture.LoadTexture(path));
             }
             return null;
         }

@@ -2,22 +2,20 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using SixLabors.ImageSharp.Processing;
 
 namespace SoftwareRenderer
 {
-    public class Texture
+    public class Texture : IDisposable
     {
-        public byte[] Data { get; private set; } // RGBA bytes, 4 per pixel
-        public int Width { get; private set; }
-        public int Height { get; private set; }
+        private Image<Rgba32> _image;
+        public int Width => _image.Width;
+        public int Height => _image.Height;
 
-        private Texture(byte[] data, int width, int height)
+        public Texture(Image<Rgba32> image)
         {
-            Data = data;
-            Width = width;
-            Height = height;
+            _image = image;
         }
-
 
         public Vector4 Sample(Vector2 uv)
         {
@@ -26,55 +24,48 @@ namespace SoftwareRenderer
             u += (u < 0) ? 1f : 0f;
             v += (v < 0) ? 1f : 0f;
 
-            // Convert to pixel coordinates
             int x = (int)(u * Width) % Width;
             int y = (int)(v * Height) % Height;
 
             if (x < 0) x += Width;
             if (y < 0) y += Height;
 
-            int index = (y * Width + x) << 2;
-
-            uint pixelData = BitConverter.ToUInt32(Data, index);
-    
+            Rgba32 pixel = _image[x, y];
             const float inv255 = 1f / 255f;
             return new Vector4(
-                (pixelData & 0xFF) * inv255,
-                ((pixelData >> 8) & 0xFF) * inv255,
-                ((pixelData >> 16) & 0xFF) * inv255,
-                ((pixelData >> 24) & 0xFF) * inv255);
+                pixel.R * inv255,
+                pixel.G * inv255,
+                pixel.B * inv255,
+                pixel.A * inv255);
         }
-        
-        public static Texture LoadTexture(string FilePath)
+
+        public void Dispose()
         {
-            var FinalPath = FilePath;
+            _image?.Dispose();
+        }
+
+        public static Texture LoadTexture(string filePath, int maxResolution = 2048)
+        {
             try
             {
-                using Image<Rgba32> image = Image.Load<Rgba32>(FinalPath);
-                int width = image.Width;
-                int height = image.Height;
-                byte[] data = new byte[width * height * 4]; // 4 bytes per pixel (RGBA)
+                var image = Image.Load<Rgba32>(filePath);
 
-                for (int y = 0; y < height; y++)
+                if (image.Width > maxResolution || image.Height > maxResolution)
                 {
-                    for (int x = 0; x < width; x++)
-                    {
-                        Rgba32 pixel = image[x, y];
-                        int index = (y * width + x) * 4;
-                        data[index] = pixel.R;
-                        data[index + 1] = pixel.G;
-                        data[index + 2] = pixel.B;
-                        data[index + 3] = pixel.A;
-                    }
+                    // Calculate new size preserving aspect ratio
+                    float scale = Math.Min((float)maxResolution / image.Width, (float)maxResolution / image.Height);
+                    int newWidth = (int)(image.Width * scale);
+                    int newHeight = (int)(image.Height * scale);
+
+                    image.Mutate(x => x.Resize(newWidth, newHeight));
                 }
 
-
-                Console.WriteLine("Loaded Texture: " + FinalPath);
-                return new Texture(data, width, height);
+                Console.WriteLine("Loaded Texture: " + filePath + $" (resized to {image.Width}x{image.Height})");
+                return new Texture(image);
             }
             catch
             {
-                Console.WriteLine("Failed to load texture: " + FinalPath);
+                Console.WriteLine("Failed to load texture: " + filePath);
                 return null;
             }
         }

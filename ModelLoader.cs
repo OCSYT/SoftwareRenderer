@@ -1,8 +1,9 @@
 using Assimp;
-using System.Numerics;
+using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Collections.Concurrent;
+using System.Numerics;
+using System.Linq;
 using Matrix4x4 = System.Numerics.Matrix4x4;
 
 namespace SoftwareRenderer
@@ -29,13 +30,13 @@ namespace SoftwareRenderer
         Unknown = TextureType.Unknown
     }
 
-    public class Material
+    public class Material : IEquatable<Material>
     {
-        public Vector4 BaseColor { get; } // RGBA base color (albedo)
-        public float Metallic { get; } // 0 (dielectric) to 1 (metal)
-        public float Roughness { get; } // 0 (smooth) to 1 (rough)
-        public Vector3 EmissiveColor { get; } // Emissive color (if no texture)
-        public Dictionary<TextureSlot, string> TexturePaths { get; }
+        public Vector4 BaseColor { get; }
+        public float Metallic { get; }
+        public float Roughness { get; }
+        public Vector3 EmissiveColor { get; }
+        public IReadOnlyDictionary<TextureSlot, string> TexturePaths { get; }
 
         public Material(Vector4 baseColor, float metallic, float roughness, Vector3 emissiveColor, Dictionary<TextureSlot, string> texturePaths)
         {
@@ -45,17 +46,77 @@ namespace SoftwareRenderer
             EmissiveColor = emissiveColor;
             TexturePaths = texturePaths;
         }
+
+        // Equality members to allow caching and reuse of Materials
+        public bool Equals(Material other)
+        {
+            if (other == null) return false;
+            if (!BaseColor.Equals(other.BaseColor)) return false;
+            if (Metallic != other.Metallic || Roughness != other.Roughness) return false;
+            if (!EmissiveColor.Equals(other.EmissiveColor)) return false;
+            if (TexturePaths.Count != other.TexturePaths.Count) return false;
+            foreach (var kvp in TexturePaths)
+            {
+                if (!other.TexturePaths.TryGetValue(kvp.Key, out var path)) return false;
+                if (!string.Equals(kvp.Value, path, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+        public override bool Equals(object obj) => Equals(obj as Material);
+        public override int GetHashCode()
+        {
+            int hash = BaseColor.GetHashCode();
+            hash = (hash * 397) ^ Metallic.GetHashCode();
+            hash = (hash * 397) ^ Roughness.GetHashCode();
+            hash = (hash * 397) ^ EmissiveColor.GetHashCode();
+            foreach (var kvp in TexturePaths)
+            {
+                hash = (hash * 397) ^ kvp.Key.GetHashCode();
+                hash = (hash * 397) ^ (kvp.Value?.GetHashCode() ?? 0);
+            }
+            return hash;
+        }
+    }
+
+    public struct VertexKey : IEquatable<VertexKey>
+    {
+        public readonly Vector3 Position;
+        public readonly Vector3 Normal;
+        public readonly Vector2 UV;
+
+        public VertexKey(Vector3 position, Vector3 normal, Vector2 uv)
+        {
+            Position = position;
+            Normal = normal;
+            UV = uv;
+        }
+
+        public bool Equals(VertexKey other) =>
+            Position.Equals(other.Position) && Normal.Equals(other.Normal) && UV.Equals(other.UV);
+
+        public override bool Equals(object obj) => obj is VertexKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = Position.GetHashCode();
+                hash = (hash * 397) ^ Normal.GetHashCode();
+                hash = (hash * 397) ^ UV.GetHashCode();
+                return hash;
+            }
+        }
     }
 
     public class Mesh
     {
         public BoundingSphere SphereBounds { get; set; }
-        public List<Shaders.VertexInput> Vertices { set; get; }
-        public List<int> Indices { set; get; }
+        public Shaders.VertexInput[] Vertices { get; }
+        public ushort[] Indices { get; }
         public Material Material { get; }
         public string ModelRootPath;
 
-        public Mesh(List<Shaders.VertexInput> vertices, List<int> indices, Material material = null)
+        public Mesh(Shaders.VertexInput[] vertices, ushort[] indices, Material material = null)
         {
             Vertices = vertices;
             Indices = indices;
@@ -95,14 +156,12 @@ namespace SoftwareRenderer
     {
         public static (List<Mesh> Meshes, List<Light> Lights) LoadModel(string filePath)
         {
-            var meshes = new ConcurrentBag<Mesh>();
+            var meshes = new List<Mesh>();
             var lights = new List<Light>();
+            var materialCache = new Dictionary<Material, Material>();
 
-
-            string finalPath = filePath;
-
-            AssimpContext context = new();
-            Scene scene = context.ImportFile(finalPath,
+            var context = new AssimpContext();
+            var scene = context.ImportFile(filePath,
                 PostProcessSteps.Triangulate |
                 PostProcessSteps.GenerateNormals |
                 PostProcessSteps.FlipUVs);
@@ -121,19 +180,19 @@ namespace SoftwareRenderer
                 Matrix4x4 nodeTransform = ConvertMatrix(node.Transform);
                 Matrix4x4 globalTransform = nodeTransform * parentTransform;
 
-                // Create rotation-only matrix for normals
+                // Rotation only for normals
                 Matrix4x4 rotationOnly = new Matrix4x4(
                     globalTransform.M11, globalTransform.M12, globalTransform.M13, 0,
                     globalTransform.M21, globalTransform.M22, globalTransform.M23, 0,
                     globalTransform.M31, globalTransform.M32, globalTransform.M33, 0,
                     0, 0, 0, 1);
 
-                Parallel.ForEach(node.MeshIndices, meshIndex =>
+                foreach (int meshIndex in node.MeshIndices)
                 {
                     var mesh = scene.Meshes[meshIndex];
-                    var vertexDict = new Dictionary<(Vector3 pos, Vector3 normal, Vector2 uv), int>();
-                    var vertices = new List<Shaders.VertexInput>();
-                    var indices = new List<int>();
+                    var vertexDict = new Dictionary<VertexKey, ushort>(mesh.VertexCount);
+                    var vertices = new List<Shaders.VertexInput>(mesh.VertexCount);
+                    var indices = new List<ushort>(mesh.FaceCount * 3);
 
                     for (int i = 0; i < mesh.FaceCount; i++)
                     {
@@ -143,7 +202,7 @@ namespace SoftwareRenderer
                         for (int j = 0; j < 3; j++)
                         {
                             int vi = face.Indices[j];
-                            if (vi < 0 || vi >= mesh.VertexCount) continue; // Safety check
+                            if (vi < 0 || vi >= mesh.VertexCount) continue;
 
                             var pos = mesh.Vertices[vi];
                             var normal = mesh.Normals.Count > vi ? mesh.Normals[vi] : new Vector3D(0, 0, 0);
@@ -152,21 +211,21 @@ namespace SoftwareRenderer
                                 ? mesh.VertexColorChannels[0][vi]
                                 : new Color4D(1, 1, 1, 1);
 
-                            var posVec = new Vector3(pos.X, pos.Y, pos.Z);
-                            var normalVec = new Vector3(normal.X, normal.Y, normal.Z);
+                            var posVec = Vector3.Transform(new Vector3(pos.X, pos.Y, pos.Z), globalTransform);
+                            var normalVec = Vector3.Normalize(Vector3.TransformNormal(new Vector3(normal.X, normal.Y, normal.Z), rotationOnly));
                             var uv = new Vector2(texCoord.X, texCoord.Y);
 
-                            var key = (posVec, normalVec, uv);
+                            var key = new VertexKey(posVec, normalVec, uv);
 
-                            if (!vertexDict.TryGetValue(key, out int index))
+                            if (!vertexDict.TryGetValue(key, out ushort index))
                             {
-                                index = vertices.Count;
+                                index = (ushort)vertices.Count;
                                 vertexDict[key] = index;
 
                                 vertices.Add(new Shaders.VertexInput(
-                                    Vector3.Transform(posVec, globalTransform),
+                                    posVec,
                                     uv,
-                                    Vector3.Normalize(Vector3.TransformNormal(normalVec, rotationOnly)),
+                                    normalVec,
                                     new Vector4(color.R, color.G, color.B, color.A)
                                 ));
                             }
@@ -177,32 +236,26 @@ namespace SoftwareRenderer
 
                     var assimpMaterial = scene.Materials[mesh.MaterialIndex];
 
-                    // PBR material properties
                     Vector4 baseColor = new Vector4(
                         assimpMaterial.ColorDiffuse.R,
                         assimpMaterial.ColorDiffuse.G,
                         assimpMaterial.ColorDiffuse.B,
                         assimpMaterial.ColorDiffuse.A);
 
-                    float metallic = 0.0f; // Default: non-metallic (dielectric)
+                    float metallic = 0.0f;
                     if (assimpMaterial.HasProperty("$mat.metallicFactor"))
-                    {
                         metallic = assimpMaterial.GetProperty("$mat.metallicFactor").GetFloatValue();
-                    }
 
-                    float roughness = 0.5f; // Default: moderate roughness
+                    float roughness = 0.5f;
                     if (assimpMaterial.HasProperty("$mat.roughnessFactor"))
-                    {
                         roughness = assimpMaterial.GetProperty("$mat.roughnessFactor").GetFloatValue();
-                    }
                     else if (assimpMaterial.HasShininess)
                     {
-                        // Convert shininess to roughness (approximation: higher shininess = lower roughness)
                         float shininess = assimpMaterial.Shininess;
-                        roughness = shininess > 0 ? Math.Clamp(1.0f - (shininess / 100.0f), 0.0f, 1.0f) : 0.5f;
+                        roughness = shininess > 0 ? 1.0f / shininess : 0.5f;
                     }
 
-                    Vector3 emissiveColor = new Vector3(
+                    Vector3 emissive = new Vector3(
                         assimpMaterial.ColorEmissive.R,
                         assimpMaterial.ColorEmissive.G,
                         assimpMaterial.ColorEmissive.B);
@@ -219,22 +272,29 @@ namespace SoftwareRenderer
                                     TextureSlot textureSlot = Enum.IsDefined(typeof(TextureSlot), (int)assimpType)
                                         ? (TextureSlot)(int)assimpType
                                         : TextureSlot.Unknown;
-                                    texturePaths[textureSlot] = Path.Combine(Path.GetDirectoryName(finalPath) ?? string.Empty, slot.FilePath);;
+                                    texturePaths[textureSlot] = Path.Combine(Path.GetDirectoryName(filePath) ?? string.Empty, slot.FilePath);;
                                 }
                             }
                         }
                     }
 
-                    var material = new Material(baseColor, metallic, roughness, emissiveColor, texturePaths);
-                    var meshToAdd = new Mesh(vertices, indices, material)
+                    var material = new Material(baseColor, metallic, roughness, emissive, texturePaths);
+
+                    // Reuse cached materials
+                    if (!materialCache.TryGetValue(material, out Material cachedMaterial))
                     {
-                        ModelRootPath = Path.GetDirectoryName(finalPath) ?? string.Empty,
+                        cachedMaterial = material;
+                        materialCache[cachedMaterial] = cachedMaterial;
+                    }
+
+                    var meshResult = new Mesh(vertices.ToArray(), indices.ToArray(), cachedMaterial)
+                    {
+                        ModelRootPath = Path.GetDirectoryName(filePath) ?? string.Empty,
                         SphereBounds = FrustumCuller.CalculateBoundingSphere(vertices.ToArray())
                     };
-                    
 
-                    meshes.Add(meshToAdd);
-                });
+                    meshes.Add(meshResult);
+                }
 
                 foreach (var child in node.Children)
                 {
@@ -244,27 +304,28 @@ namespace SoftwareRenderer
 
             ProcessNode(scene.RootNode, Matrix4x4.Identity);
 
-            foreach (var assimpLight in scene.Lights)
+            // Load lights from scene (if any)
+            for (int i = 0; i < scene.LightCount; i++)
             {
-                var position = new Vector3(assimpLight.Position.X, assimpLight.Position.Y, assimpLight.Position.Z);
-                var direction = new Vector3(assimpLight.Direction.X, assimpLight.Direction.Y, assimpLight.Direction.Z);
-                var color = new Vector3(assimpLight.ColorDiffuse.R, assimpLight.ColorDiffuse.G, assimpLight.ColorDiffuse.B);
+                var light = scene.Lights[i];
+
+                Vector3 pos = new Vector3(light.Position.X, light.Position.Y, light.Position.Z);
+                Vector3 dir = new Vector3(light.Direction.X, light.Direction.Y, light.Direction.Z);
+                Vector3 color = new Vector3(light.ColorDiffuse.R, light.ColorDiffuse.G, light.ColorDiffuse.B);
 
                 lights.Add(new Light(
-                    position,
-                    direction,
+                    pos,
+                    dir,
                     color,
-                    assimpLight.LightType,
-                    assimpLight.AttenuationConstant,
-                    assimpLight.AttenuationLinear,
-                    assimpLight.AttenuationQuadratic,
-                    assimpLight.AngleInnerCone,
-                    assimpLight.AngleOuterCone
-                ));
+                    light.LightType,
+                    light.AttenuationConstant,
+                    light.AttenuationLinear,
+                    light.AttenuationQuadratic,
+                    light.AngleInnerCone,
+                    light.AngleOuterCone));
             }
 
-            context.Dispose();
-            return (meshes.ToList(), lights);
+            return (meshes, lights);
         }
     }
 }

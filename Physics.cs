@@ -17,7 +17,7 @@ public static class Physics
         Vector3 rayOrigin,
         Vector3 rayDirection,
         Shaders.VertexInput[] vertices,
-        int[] indices,
+        ushort[] indices,
         Matrix4x4 model,
         out float hitDistance,
         out Vector3 hitPoint,
