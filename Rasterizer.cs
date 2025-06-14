@@ -66,7 +66,7 @@ namespace SoftwareRenderer
         }
 
         private const float Epsilon = 1e-6f;
-        private const int TileSize = 32;
+        private const int TileSize = 8;
         private static object[] TileLocks;
         private static int TilesX, TilesY;
 
@@ -191,7 +191,7 @@ namespace SoftwareRenderer
                 if (GeometryToClipRatio <= 1.0f)
                     return 1;
 
-                int Subdiv = (int)Math.Ceiling(GeometryToClipRatio) / 9;
+                int Subdiv = (int)Math.Ceiling(GeometryToClipRatio) / 6;
                 return Math.Clamp(Subdiv, 1, MaxSubdivisions);
             }
 

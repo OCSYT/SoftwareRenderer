@@ -5,79 +5,10 @@ using System.IO;
 using System.Numerics;
 using System.Linq;
 using Matrix4x4 = System.Numerics.Matrix4x4;
+using Quaternion = System.Numerics.Quaternion;
 
 namespace SoftwareRenderer
 {
-    public enum TextureSlot
-    {
-        Diffuse = TextureType.Diffuse,
-        Specular = TextureType.Specular,
-        Ambient = TextureType.Ambient,
-        Emissive = TextureType.Emissive,
-        Height = TextureType.Height,
-        Normals = TextureType.Normals,
-        Shininess = TextureType.Shininess,
-        Opacity = TextureType.Opacity,
-        Displacement = TextureType.Displacement,
-        Lightmap = TextureType.Lightmap,
-        Reflection = TextureType.Reflection,
-        BaseColor = TextureType.BaseColor,
-        NormalCamera = TextureType.NormalCamera,
-        EmissionColor = TextureType.EmissionColor,
-        Metalness = TextureType.Metalness,
-        DiffuseRoughness = TextureType.Roughness,
-        AmbientOcclusion = TextureType.AmbientOcclusion,
-        Unknown = TextureType.Unknown
-    }
-
-    public class Material : IEquatable<Material>
-    {
-        public Vector4 BaseColor { get; }
-        public float Metallic { get; }
-        public float Roughness { get; }
-        public Vector3 EmissiveColor { get; }
-        public IReadOnlyDictionary<TextureSlot, string> TexturePaths { get; }
-
-        public Material(Vector4 baseColor, float metallic, float roughness, Vector3 emissiveColor, Dictionary<TextureSlot, string> texturePaths)
-        {
-            BaseColor = baseColor;
-            Metallic = metallic;
-            Roughness = roughness;
-            EmissiveColor = emissiveColor;
-            TexturePaths = texturePaths;
-        }
-
-        // Equality members to allow caching and reuse of Materials
-        public bool Equals(Material other)
-        {
-            if (other == null) return false;
-            if (!BaseColor.Equals(other.BaseColor)) return false;
-            if (Metallic != other.Metallic || Roughness != other.Roughness) return false;
-            if (!EmissiveColor.Equals(other.EmissiveColor)) return false;
-            if (TexturePaths.Count != other.TexturePaths.Count) return false;
-            foreach (var kvp in TexturePaths)
-            {
-                if (!other.TexturePaths.TryGetValue(kvp.Key, out var path)) return false;
-                if (!string.Equals(kvp.Value, path, StringComparison.OrdinalIgnoreCase)) return false;
-            }
-            return true;
-        }
-        public override bool Equals(object obj) => Equals(obj as Material);
-        public override int GetHashCode()
-        {
-            int hash = BaseColor.GetHashCode();
-            hash = (hash * 397) ^ Metallic.GetHashCode();
-            hash = (hash * 397) ^ Roughness.GetHashCode();
-            hash = (hash * 397) ^ EmissiveColor.GetHashCode();
-            foreach (var kvp in TexturePaths)
-            {
-                hash = (hash * 397) ^ kvp.Key.GetHashCode();
-                hash = (hash * 397) ^ (kvp.Value?.GetHashCode() ?? 0);
-            }
-            return hash;
-        }
-    }
-
     public struct VertexKey : IEquatable<VertexKey>
     {
         public readonly Vector3 Position;
@@ -111,66 +42,111 @@ namespace SoftwareRenderer
     public class Mesh
     {
         public BoundingSphere SphereBounds { get; set; }
-        public Shaders.VertexInput[] Vertices { get; }
-        public ushort[] Indices { get; }
+        public Shaders.VertexInput[] Vertices { get; set; }
+        public Shaders.VertexInput[] BaseVertices { get; private set; } // Original vertices
+        public ushort[] Indices { get; set; }
         public Material Material { get; }
-        public string ModelRootPath;
+        public string ModelRootPath { get; set; }
 
         public Mesh(Shaders.VertexInput[] vertices, ushort[] indices, Material material = null)
         {
             Vertices = vertices;
+            BaseVertices = (Shaders.VertexInput[])vertices.Clone();
             Indices = indices;
             Material = material;
         }
     }
 
-    public class Light
+    public class Model
     {
-        public Vector3 Position { get; }
-        public Vector3 Direction { get; }
-        public Vector3 Color { get; }
-        public LightSourceType Type { get; }
-        public float AttenuationConstant { get; }
-        public float AttenuationLinear { get; }
-        public float AttenuationQuadratic { get; }
-        public float SpotCutoffInner { get; }
-        public float SpotCutoffOuter { get; }
+        private static readonly Dictionary<string, Model> _modelCache = new Dictionary<string, Model>();
+        private static readonly Dictionary<string, Material> _materialCache = new Dictionary<string, Material>();
 
-        public Light(Vector3 position, Vector3 direction, Vector3 color, LightSourceType type,
-            float attenuationConstant, float attenuationLinear, float attenuationQuadratic,
-            float spotCutoffInner, float spotCutoffOuter)
+        public List<Mesh> Meshes { get; private set; } = new List<Mesh>();
+        public List<Light> Lights { get; private set; } = new List<Light>();
+        public List<Model> AnimationFrames { get; private set; } = new List<Model>();
+        
+        public Model LoadModel(string filePath)
         {
-            Position = position;
-            Direction = direction;
-            Color = color;
-            Type = type;
-            AttenuationConstant = attenuationConstant;
-            AttenuationLinear = attenuationLinear;
-            AttenuationQuadratic = attenuationQuadratic;
-            SpotCutoffInner = spotCutoffInner;
-            SpotCutoffOuter = spotCutoffOuter;
+            string normalizedPath = Path.GetFullPath(filePath);
+
+            // Check if this is a directory containing animation frames
+            if (Directory.Exists(normalizedPath))
+            {
+                if (_modelCache.TryGetValue(normalizedPath, out Model cachedModel))
+                {
+                    Meshes = cachedModel.Meshes;
+                    Lights = cachedModel.Lights;
+                    AnimationFrames = cachedModel.AnimationFrames;
+                    return this;
+                }
+
+                AnimationFrames.Clear();
+
+                var supportedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ".fbx", ".obj", ".dae", ".3ds", ".blend", ".gltf", ".glb"
+                };
+
+                var files = Directory.GetFiles(normalizedPath)
+                    .Where(f => supportedExtensions.Contains(Path.GetExtension(f)))
+                    .OrderBy(f => f)
+                    .ToList();
+
+                foreach (var file in files)
+                {
+                    var animFrame = new Model();
+                    animFrame.LoadSingleModel(file);
+                    AnimationFrames.Add(animFrame);
+                }
+
+                if (AnimationFrames.Count > 0)
+                {
+                    Meshes = AnimationFrames[0].Meshes;
+                    Lights = AnimationFrames[0].Lights;
+                }
+
+                _modelCache[normalizedPath] = this;
+            }
+            else if (File.Exists(normalizedPath))
+            {
+                if (_modelCache.TryGetValue(normalizedPath, out Model cachedModel))
+                {
+                    Meshes = cachedModel.Meshes;
+                    Lights = cachedModel.Lights;
+                    AnimationFrames = cachedModel.AnimationFrames;
+                    return this;
+                }
+
+                LoadSingleModel(normalizedPath);
+                _modelCache[normalizedPath] = this;
+            }
+            else
+            {
+                throw new FileNotFoundException($"Model path not found: {normalizedPath}");
+            }
+
+            return this;
         }
-    }
 
-    public static class Model
-    {
-        public static (List<Mesh> Meshes, List<Light> Lights) LoadModel(string filePath)
+        private void LoadSingleModel(string filePath)
         {
+            Console.WriteLine("loading file: " + filePath);
             var meshes = new List<Mesh>();
             var lights = new List<Light>();
-            var materialCache = new Dictionary<Material, Material>();
+            var sceneMaterialCache = new Dictionary<int, Material>();
 
             var context = new AssimpContext();
             var scene = context.ImportFile(filePath,
                 PostProcessSteps.Triangulate |
                 PostProcessSteps.GenerateNormals |
-                PostProcessSteps.FlipUVs);
-
-            if (scene.MeshCount == 0)
-                throw new Exception("No meshes found in model file");
+                PostProcessSteps.FlipUVs |
+                PostProcessSteps.CalculateTangentSpace |
+                PostProcessSteps.JoinIdenticalVertices);
 
             Matrix4x4 ConvertMatrix(Assimp.Matrix4x4 m) =>
-                new(m.A1, m.B1, m.C1, m.D1,
+                new(
+                    m.A1, m.B1, m.C1, m.D1,
                     m.A2, m.B2, m.C2, m.D2,
                     m.A3, m.B3, m.C3, m.D3,
                     m.A4, m.B4, m.C4, m.D4);
@@ -180,7 +156,6 @@ namespace SoftwareRenderer
                 Matrix4x4 nodeTransform = ConvertMatrix(node.Transform);
                 Matrix4x4 globalTransform = nodeTransform * parentTransform;
 
-                // Rotation only for normals
                 Matrix4x4 rotationOnly = new Matrix4x4(
                     globalTransform.M11, globalTransform.M12, globalTransform.M13, 0,
                     globalTransform.M21, globalTransform.M22, globalTransform.M23, 0,
@@ -205,14 +180,18 @@ namespace SoftwareRenderer
                             if (vi < 0 || vi >= mesh.VertexCount) continue;
 
                             var pos = mesh.Vertices[vi];
-                            var normal = mesh.Normals.Count > vi ? mesh.Normals[vi] : new Vector3D(0, 0, 0);
-                            var texCoord = mesh.HasTextureCoords(0) ? mesh.TextureCoordinateChannels[0][vi] : new Vector3D();
-                            var color = mesh.HasVertexColors(0) && vi < mesh.VertexColorChannels[0].Count
+                            var normal = mesh.HasNormals ? mesh.Normals[vi] : new Vector3D(0, 0, 0);
+                            var texCoord = mesh.HasTextureCoords(0)
+                                ? mesh.TextureCoordinateChannels[0][vi]
+                                : new Vector3D();
+                            var color = (mesh.HasVertexColors(0) && vi < mesh.VertexColorChannels[0].Count)
                                 ? mesh.VertexColorChannels[0][vi]
                                 : new Color4D(1, 1, 1, 1);
 
                             var posVec = Vector3.Transform(new Vector3(pos.X, pos.Y, pos.Z), globalTransform);
-                            var normalVec = Vector3.Normalize(Vector3.TransformNormal(new Vector3(normal.X, normal.Y, normal.Z), rotationOnly));
+                            var normalVec =
+                                Vector3.Normalize(Vector3.TransformNormal(new Vector3(normal.X, normal.Y, normal.Z),
+                                    rotationOnly));
                             var uv = new Vector2(texCoord.X, texCoord.Y);
 
                             var key = new VertexKey(posVec, normalVec, uv);
@@ -236,58 +215,72 @@ namespace SoftwareRenderer
 
                     var assimpMaterial = scene.Materials[mesh.MaterialIndex];
 
-                    Vector4 baseColor = new Vector4(
-                        assimpMaterial.ColorDiffuse.R,
-                        assimpMaterial.ColorDiffuse.G,
-                        assimpMaterial.ColorDiffuse.B,
-                        assimpMaterial.ColorDiffuse.A);
+                    // Create a material key that combines all material properties
+                    string materialKey = $"{filePath}:{mesh.MaterialIndex}:{assimpMaterial.Name}";
 
-                    float metallic = 0.0f;
-                    if (assimpMaterial.HasProperty("$mat.metallicFactor"))
-                        metallic = assimpMaterial.GetProperty("$mat.metallicFactor").GetFloatValue();
-
-                    float roughness = 0.5f;
-                    if (assimpMaterial.HasProperty("$mat.roughnessFactor"))
-                        roughness = assimpMaterial.GetProperty("$mat.roughnessFactor").GetFloatValue();
-                    else if (assimpMaterial.HasShininess)
+                    if (!_materialCache.TryGetValue(materialKey, out Material cachedMaterial))
                     {
-                        float shininess = assimpMaterial.Shininess;
-                        roughness = shininess > 0 ? 1.0f / shininess : 0.5f;
-                    }
+                        Vector4 baseColor = new Vector4(
+                            assimpMaterial.ColorDiffuse.R,
+                            assimpMaterial.ColorDiffuse.G,
+                            assimpMaterial.ColorDiffuse.B,
+                            assimpMaterial.ColorDiffuse.A);
 
-                    Vector3 emissive = new Vector3(
-                        assimpMaterial.ColorEmissive.R,
-                        assimpMaterial.ColorEmissive.G,
-                        assimpMaterial.ColorEmissive.B);
+                        float metallic = 0.0f;
+                        if (assimpMaterial.HasProperty("$mat.metallicFactor"))
+                            metallic = assimpMaterial.GetProperty("$mat.metallicFactor").GetFloatValue();
 
-                    var texturePaths = new Dictionary<TextureSlot, string>();
-                    foreach (TextureType assimpType in Enum.GetValues(typeof(TextureType)))
-                    {
-                        if (assimpMaterial.GetMaterialTextureCount(assimpType) > 0)
+                        float roughness = 0.5f;
+                        if (assimpMaterial.HasProperty("$mat.roughnessFactor"))
+                            roughness = assimpMaterial.GetProperty("$mat.roughnessFactor").GetFloatValue();
+                        else if (assimpMaterial.HasShininess)
                         {
-                            if (assimpMaterial.GetMaterialTexture(assimpType, 0, out Assimp.TextureSlot slot))
+                            float shininess = assimpMaterial.Shininess;
+                            roughness = shininess > 0 ? 1.0f / shininess : 0.5f;
+                        }
+
+                        Vector3 emissive = new Vector3(
+                            assimpMaterial.ColorEmissive.R,
+                            assimpMaterial.ColorEmissive.G,
+                            assimpMaterial.ColorEmissive.B);
+
+                        var texturePaths = new Dictionary<TextureSlot, string>();
+                        foreach (TextureType assimpType in Enum.GetValues(typeof(TextureType)))
+                        {
+                            if (assimpMaterial.GetMaterialTextureCount(assimpType) > 0)
                             {
-                                if (!string.IsNullOrWhiteSpace(slot.FilePath))
+                                if (assimpMaterial.GetMaterialTexture(assimpType, 0, out Assimp.TextureSlot slot))
                                 {
-                                    TextureSlot textureSlot = Enum.IsDefined(typeof(TextureSlot), (int)assimpType)
-                                        ? (TextureSlot)(int)assimpType
-                                        : TextureSlot.Unknown;
-                                    texturePaths[textureSlot] = Path.Combine(Path.GetDirectoryName(filePath) ?? string.Empty, slot.FilePath);;
+                                    if (!string.IsNullOrWhiteSpace(slot.FilePath))
+                                    {
+                                        TextureSlot textureSlot = assimpType switch
+                                        {
+                                            TextureType.Diffuse => TextureSlot.Diffuse,
+                                            TextureType.Specular => TextureSlot.Specular,
+                                            TextureType.Normals => TextureSlot.Normals,
+                                            TextureType.Height => TextureSlot.Height,
+                                            TextureType.Emissive => TextureSlot.Emissive,
+                                            _ => TextureSlot.Unknown
+                                        };
+                                        texturePaths[textureSlot] =
+                                            Path.Combine(Path.GetDirectoryName(filePath) ?? string.Empty,
+                                                slot.FilePath);
+                                    }
                                 }
                             }
                         }
+
+                        cachedMaterial = new Material(baseColor, metallic, roughness, emissive, texturePaths);
+                        _materialCache[materialKey] = cachedMaterial;
+                        sceneMaterialCache[mesh.MaterialIndex] = cachedMaterial;
                     }
-
-                    var material = new Material(baseColor, metallic, roughness, emissive, texturePaths);
-
-                    // Reuse cached materials
-                    if (!materialCache.TryGetValue(material, out Material cachedMaterial))
+                    else if (!sceneMaterialCache.ContainsKey(mesh.MaterialIndex))
                     {
-                        cachedMaterial = material;
-                        materialCache[cachedMaterial] = cachedMaterial;
+                        sceneMaterialCache[mesh.MaterialIndex] = cachedMaterial;
                     }
 
-                    var meshResult = new Mesh(vertices.ToArray(), indices.ToArray(), cachedMaterial)
+                    var meshResult = new Mesh(vertices.ToArray(), indices.ToArray(),
+                        sceneMaterialCache[mesh.MaterialIndex])
                     {
                         ModelRootPath = Path.GetDirectoryName(filePath) ?? string.Empty,
                         SphereBounds = FrustumCuller.CalculateBoundingSphere(vertices.ToArray())
@@ -304,11 +297,9 @@ namespace SoftwareRenderer
 
             ProcessNode(scene.RootNode, Matrix4x4.Identity);
 
-            // Load lights from scene (if any)
             for (int i = 0; i < scene.LightCount; i++)
             {
                 var light = scene.Lights[i];
-
                 Vector3 pos = new Vector3(light.Position.X, light.Position.Y, light.Position.Z);
                 Vector3 dir = new Vector3(light.Direction.X, light.Direction.Y, light.Direction.Z);
                 Vector3 color = new Vector3(light.ColorDiffuse.R, light.ColorDiffuse.G, light.ColorDiffuse.B);
@@ -325,7 +316,30 @@ namespace SoftwareRenderer
                     light.AngleOuterCone));
             }
 
-            return (meshes, lights);
+            Meshes = meshes;
+            Lights = lights;
+        }
+
+        private int _currentFrameIndex = 0;
+        private double _timeAccumulator = 0;
+
+        public void PlayAnimation(Action<Model> OnFrameUpdate, double DeltaTime, int FPS = 30)
+        {
+            if (AnimationFrames.Count == 0) return;
+
+            double frameDuration = 1.0 / FPS;
+            _timeAccumulator += DeltaTime;
+
+            while (_timeAccumulator >= frameDuration)
+            {
+                _timeAccumulator -= frameDuration;
+                _currentFrameIndex = (_currentFrameIndex + 1) % AnimationFrames.Count;
+            }
+
+
+            var currentFrame = AnimationFrames[_currentFrameIndex];
+            OnFrameUpdate?.Invoke(currentFrame);
+
         }
     }
 }

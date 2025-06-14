@@ -23,9 +23,9 @@ namespace SoftwareRenderer
         private IMouse Mouse;
         private CharacterController CharacterController;
         private Networking NetworkManager;
-        private List<Mesh> Dust2Model;
-        private List<Mesh> PlayerModel;
-        private List<Mesh> GunModel;
+        private Model Dust2Model;
+        private Model PlayerModel;
+        private Model GunModel;
 
         private Vector3 SpawnPosition = new Vector3(-16.4f, 1.5f, 6.5f);
         private Vector3 SpawnPosition2 = new Vector3(-16.5f, 0.6f, -23);
@@ -181,7 +181,7 @@ namespace SoftwareRenderer
                 if (player.Id == NetworkManager.ClientId) return;
 
                 var playerMatrix = CreatePlayerMatrix(player);
-                foreach (var mesh in PlayerModel)
+                foreach (var mesh in PlayerModel.Meshes)
                 {
                     if (Physics.Raycast(rayOrigin, rayDirection, mesh.Vertices.ToArray(), mesh.Indices.ToArray(), playerMatrix,
                         out float distance, out Vector3 point, out Vector3 normal, RaycastFaceMask.IgnoreBackfaces) && distance < closestHit.Distance)
@@ -199,7 +199,7 @@ namespace SoftwareRenderer
 
             if (Dust2Model != null)
             {
-                Parallel.ForEach(Dust2Model, mesh =>
+                Parallel.ForEach(Dust2Model.Meshes, mesh =>
                 {
                     if (Physics.Raycast(rayOrigin, rayDirection, mesh.Vertices.ToArray(), mesh.Indices.ToArray(), ModelMatrix,
                         out float distance, out Vector3 point, out Vector3 normal, RaycastFaceMask.IgnoreBackfaces) && distance < closestHit.Distance)
@@ -417,12 +417,13 @@ namespace SoftwareRenderer
             RenderPlayerNametags();
             Window.RenderFrame();
         }
-
+        
+        
         private void RenderDust2()
         {
             if (Dust2Model == null)
             {
-                Dust2Model = Model.LoadModel("./Assets/dust2/scene.gltf").Meshes;
+                Dust2Model = new Model().LoadModel("./Assets/dust2/scene.gltf");
                 Random random = new Random();
                 double randomValue = random.NextDouble();
 
@@ -434,13 +435,13 @@ namespace SoftwareRenderer
                 Camera.Position = spawnPos;
                 Camera.Rotation = cameraRotation;
                 
-                CharacterController = new CharacterController(spawnPos, [Dust2Model], [ModelMatrix]);
+                CharacterController = new CharacterController(spawnPos, [Dust2Model.Meshes], [ModelMatrix]);
             }
 
             var viewMatrix = Camera.GetViewMatrix();
             RenderedModels = 0;
 
-            Parallel.ForEach(Dust2Model, mesh =>
+            Parallel.ForEach(Dust2Model.Meshes, mesh =>
             {
                 if (!FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, ModelMatrix, viewMatrix, ProjectionMatrix))
                     return;
@@ -468,14 +469,14 @@ namespace SoftwareRenderer
         {
             if (GunModel == null)
             {
-                GunModel = Model.LoadModel("./Assets/Gun/HL2 Pistol.obj").Meshes;
+                GunModel = new Model().LoadModel("./Assets/Gun/HL2 Pistol.obj");
             }
 
             var viewMatrix = Camera.GetViewMatrix();
             var gunMatrix = GunMatrix * Matrix4x4.CreateFromQuaternion(WeaponSway * Recoil) *
-                           Matrix4x4.CreateTranslation(Camera.Position + Vector3.Transform(new Vector3(0.1f, -0.05f, -0.15f + Math.Abs(Recoil.X / 5)), Camera.Rotation));
+                           Matrix4x4.CreateTranslation(Camera.Position + Vector3.Transform(new Vector3(0.05f, -0.05f, -0.15f + Math.Abs(Recoil.X / 5)), Camera.Rotation));
 
-            Parallel.ForEach(GunModel, mesh =>
+            Parallel.ForEach(GunModel.Meshes, mesh =>
             {
                 if (!FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, gunMatrix, viewMatrix, ProjectionMatrix))
                     return;
@@ -503,7 +504,7 @@ namespace SoftwareRenderer
         {
             if (PlayerModel == null)
             {
-                PlayerModel = Model.LoadModel("./Assets/gordon_freeman/scene.gltf").Meshes;
+                PlayerModel = new Model().LoadModel("./Assets/gordon_freeman/scene.gltf");
             }
 
             if (PlayerModel == null || CharacterController == null) return;
@@ -520,7 +521,7 @@ namespace SoftwareRenderer
                 if (player.Id == NetworkManager.ClientId) continue;
                 
                 var playerMatrix = CreatePlayerMatrix(player);
-                foreach (var mesh in PlayerModel)
+                foreach (var mesh in PlayerModel.Meshes)
                 {
                     if (!FrustumCuller.IsSphereInFrustum(mesh.SphereBounds, playerMatrix, viewMatrix, ProjectionMatrix))
                         continue;
@@ -668,7 +669,7 @@ namespace SoftwareRenderer
 
             if (ImGui.CollapsingHeader("Scene Info", ImGuiTreeNodeFlags.DefaultOpen))
             {
-                ImGui.Text($"Loaded Meshes: {Dust2Model?.Count ?? 0}");
+                ImGui.Text($"Loaded Meshes: {Dust2Model.Meshes?.Count ?? 0}");
                 ImGui.Text($"Runtime: {Time:F2}s");
                 ImGui.Text($"Window Size: {Window.WindowWidth}x{Window.WindowHeight}");
                 ImGui.Text($"Render Size: {Window.RenderWidth}x{Window.RenderHeight}");
@@ -837,7 +838,7 @@ namespace SoftwareRenderer
             {
                 ClipPosition = clipPos,
                 Data = { ["WorldNormal"] = worldNormal },
-                TexCoord = vertex.TexCoord,
+                TexCoord = vertex.UV,
                 Color = vertex.Color,
                 Normal = vertex.Normal,
                 Interpolate = true
@@ -957,76 +958,12 @@ namespace SoftwareRenderer
                         float Distance = Vector3.Distance(Camera.Position, Position);
                         float Volume = Math.Clamp(25f / (0.25f * Distance), 0f, 25f); // SFML style volume 0-100
                         string FilePath = "./Assets/pistol.wav";
-
-                        try
-                        {
-                            if (SDL.SDL_Init(SDL.SDL_INIT_AUDIO) != 0)
-                            {
-                                Console.WriteLine("SDL_Init Error: " + SDL.SDL_GetError());
-                                return;
-                            }
-
-                            if (SDL.SDL_LoadWAV(FilePath, out var Spec, out var AudioBuf, out var AudioLen) == IntPtr.Zero)
-                            {
-                                Console.WriteLine("Could not load WAV file.");
-                                return;
-                            }
-
-                            AdjustVolume(AudioBuf, AudioLen, Volume / 100f);
-
-                            Spec.callback = null;
-                            Spec.userdata = IntPtr.Zero;
-
-                            var DeviceId = SDL.SDL_OpenAudioDevice(null, 0, ref Spec, out _, 0);
-                            if (DeviceId == 0)
-                            {
-                                Console.WriteLine("Failed to open audio device.");
-                                SDL.SDL_FreeWAV(AudioBuf);
-                                return;
-                            }
-
-                            SDL.SDL_QueueAudio(DeviceId, AudioBuf, AudioLen);
-                            SDL.SDL_PauseAudioDevice(DeviceId, 0);
-                            
-                            int bytesPerSample = SDL.SDL_AUDIO_BITSIZE(Spec.format) / 8;
-                            int durationMs = (int)((AudioLen / (Spec.channels * bytesPerSample * (float)Spec.freq)) * 1000);
-                            
-                            _ = Task.Run(async () =>
-                            {
-                                try
-                                {
-                                    await Task.Delay(durationMs);
-                                }
-                                finally
-                                {
-                                    SDL.SDL_CloseAudioDevice(DeviceId);
-                                    SDL.SDL_FreeWAV(AudioBuf);
-                                }
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Failed to play sound: {ex.Message}");
-                        }
+                        Sounds.PlaySound(FilePath, Volume / 100);
                         break;
                 }
             };
         }
         
-        unsafe void AdjustVolume(IntPtr buffer, uint length, float volume)
-        {
-            short* samples = (short*)buffer;
-            int sampleCount = (int)(length / 2);
-            for (int i = 0; i < sampleCount; i++)
-            {
-                int sample = (int)(samples[i] * volume);
-                // Clamp to short range
-                if (sample > short.MaxValue) sample = short.MaxValue;
-                if (sample < short.MinValue) sample = short.MinValue;
-                samples[i] = (short)sample;
-            }
-        }
-
         private static Vector3 EulerToDirection(Vector3 eulerDegrees)
         {
             var radians = eulerDegrees * MathF.PI / 180f;

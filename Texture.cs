@@ -2,10 +2,32 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Assimp;
 using SixLabors.ImageSharp.Processing;
 
 namespace SoftwareRenderer
 {
+    public enum TextureSlot
+    {
+        Diffuse = TextureType.Diffuse,
+        Specular = TextureType.Specular,
+        Ambient = TextureType.Ambient,
+        Emissive = TextureType.Emissive,
+        Height = TextureType.Height,
+        Normals = TextureType.Normals,
+        Shininess = TextureType.Shininess,
+        Opacity = TextureType.Opacity,
+        Displacement = TextureType.Displacement,
+        Lightmap = TextureType.Lightmap,
+        Reflection = TextureType.Reflection,
+        BaseColor = TextureType.BaseColor,
+        NormalCamera = TextureType.NormalCamera,
+        EmissionColor = TextureType.EmissionColor,
+        Metalness = TextureType.Metalness,
+        DiffuseRoughness = TextureType.Roughness,
+        AmbientOcclusion = TextureType.AmbientOcclusion,
+        Unknown = TextureType.Unknown
+    }
     public class Texture : IDisposable
     {
         private Image<Rgba32> _image;
