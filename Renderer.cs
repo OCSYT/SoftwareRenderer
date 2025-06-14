@@ -351,8 +351,8 @@ namespace SoftwareRenderer
             if (ImGui.Begin("Player Health", ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoDocking))
             {
                 ImGui.Text($"Health: {player.Health:F0}");
-                ImGui.End();
             }
+            ImGui.End();
         }
 
         private void UpdateCharacterController(float deltaTime)
