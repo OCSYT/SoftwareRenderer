@@ -2,13 +2,14 @@
 using Silk.NET.OpenGL;
 using Silk.NET.Maths;
 using System;
+using System.Collections;
 using System.Runtime.InteropServices;
 using Silk.NET.Input;
 using System.Threading.Tasks;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using Silk.NET.OpenGL.Extensions.ImGui;
-using ImGuiNET; 
+
 
 namespace SoftwareRenderer
 {
@@ -253,7 +254,7 @@ namespace SoftwareRenderer
             }
             ImGuiController.Render();
         }
-
+        
         public void UpdateRenderScale(float scale)
         {
             RenderScale = scale;
@@ -261,7 +262,7 @@ namespace SoftwareRenderer
             RenderHeight = (int)(WindowHeight * RenderScale);
             HandleResize(new Vector2D<int>(WindowWidth, WindowHeight));
         }
-        
+
         private void HandleResize(Vector2D<int> newSize)
         {
             if (newSize.X <= 0 || newSize.Y <= 0)
@@ -277,22 +278,14 @@ namespace SoftwareRenderer
             RenderWidth = Math.Max((int)(WindowWidth * RenderScale), 1);
             RenderHeight = Math.Max((int)(WindowHeight * RenderScale), 1);
 
-            // Allocate new buffers
             var newColorBuffer = new Vector4[RenderWidth * RenderHeight];
             var newDepthBuffer = new float[RenderWidth * RenderHeight];
 
-            // Copy old buffer data if available and compatible
             if (ColorBuffer is { Length: > 0 } oldColorBuffer &&
                 DepthBuffer is { Length: > 0 } oldDepthBuffer)
             {
-                int oldWidth = RenderWidth; // default guess
+                int oldWidth = (int)Math.Sqrt(oldColorBuffer.Length);
                 int oldHeight = oldColorBuffer.Length / oldWidth;
-
-                if (RenderWidth > 0 && RenderHeight > 0)
-                {
-                    oldWidth = (int)Math.Sqrt(oldColorBuffer.Length);
-                    oldHeight = oldColorBuffer.Length / oldWidth;
-                }
 
                 int copyHeight = Math.Min(oldHeight, RenderHeight);
                 int copyWidth = Math.Min(oldWidth, RenderWidth);
@@ -312,7 +305,6 @@ namespace SoftwareRenderer
             ColorBuffer = newColorBuffer;
             DepthBuffer = newDepthBuffer;
 
-            // Resize OpenGL texture
             Gl.BindTexture(TextureTarget.Texture2D, TextureHandle);
             unsafe
             {
@@ -321,7 +313,6 @@ namespace SoftwareRenderer
                     PixelFormat.Rgb, PixelType.Float, null);
             }
 
-            // Update viewport to match window size
             Gl.Viewport(0, 0, (uint)WindowWidth, (uint)WindowHeight);
 
             Console.WriteLine($"Resized to: {WindowWidth}x{WindowHeight} (Render: {RenderWidth}x{RenderHeight})");
