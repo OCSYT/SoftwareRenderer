@@ -30,7 +30,7 @@ namespace SoftwareRenderer
         private Vector3 SpawnPosition = new Vector3(-16.4f, 1.5f, 6.5f);
         private Vector3 SpawnPosition2 = new Vector3(-16.5f, 0.6f, -23);
         private Matrix4x4 ModelMatrix = Matrix4x4.CreateScale(0.5f);
-        private Matrix4x4 GunMatrix = Matrix4x4.CreateScale(0.01f);
+        private Matrix4x4 GunMatrix = Matrix4x4.CreateScale(0.02f) * Matrix4x4.CreateFromYawPitchRoll(-90 * (MathF.PI / 180), 0, 0);
         private Matrix4x4 ProjectionMatrix;
         private Vector2 LastMousePosition;
         private Quaternion WeaponSway = Quaternion.Identity;
@@ -469,7 +469,7 @@ namespace SoftwareRenderer
         {
             if (GunModel == null)
             {
-                GunModel = new Model().LoadModel("./Assets/Gun/HL2 Pistol.obj");
+                GunModel = new Model().LoadModel("./Assets/Gun/scene.gltf");
             }
 
             var viewMatrix = Camera.GetViewMatrix();

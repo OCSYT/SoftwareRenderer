@@ -8,6 +8,7 @@ using Silk.NET.Input;
 using System.Threading.Tasks;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using Coroutine;
 using Silk.NET.OpenGL.Extensions.ImGui;
 
 
@@ -210,8 +211,16 @@ namespace SoftwareRenderer
             ManualRenderRequested = true;
         }
 
+        DateTime LastTime = DateTime.Now;
+        DateTime CurrentTime = DateTime.Now;
+
         private void OnRender(double deltaTime)
         {
+            CurrentTime = DateTime.Now;
+            CoroutineHandler.Tick(CurrentTime - LastTime);
+            LastTime = CurrentTime;
+
+
             ImGuiController.Update((float)deltaTime);
             UpdateEvent?.Invoke(deltaTime);
             if (ManualRenderRequested)
@@ -252,9 +261,10 @@ namespace SoftwareRenderer
 
                 ManualRenderRequested = false;
             }
+
             ImGuiController.Render();
         }
-        
+
         public void UpdateRenderScale(float scale)
         {
             RenderScale = scale;
@@ -262,65 +272,98 @@ namespace SoftwareRenderer
             RenderHeight = (int)(WindowHeight * RenderScale);
             HandleResize(new Vector2D<int>(WindowWidth, WindowHeight));
         }
+        
+        private ActiveCoroutine? Active; // Track the running coroutine
 
+        public void ScheduleResize(Vector2D<int> newSize)
+        {
+            if (Active != null)
+            {
+                Active.Cancel();
+            }
+            
+            Active = CoroutineHandler.Start(ResizeCoroutine(newSize), "Resize Coroutine");
+        }
+
+        private IEnumerable<Wait> ResizeCoroutine(Vector2D<int> newSize)
+        {
+            yield return new Wait(.25f);
+            Console.WriteLine("resizing");
+            if (Active?.IsFinished == false)
+            {
+                HandleResize(newSize);
+            }
+        }
+        
         private void HandleResize(Vector2D<int> newSize)
         {
-            if (newSize.X <= 0 || newSize.Y <= 0)
+            // Early validation with constants
+            const int MinDimension = 1;
+            if (newSize.X < MinDimension || newSize.Y < MinDimension)
             {
-                Console.WriteLine("Resize ignored: new size is invalid.");
+                Console.WriteLine("Resize ignored: dimensions must be positive.");
                 return;
             }
 
-            WindowWidth = newSize.X;
-            WindowHeight = newSize.Y;
+            // Cache new dimensions
+            int windowWidth = newSize.X;
+            int windowHeight = newSize.Y;
 
-            RenderScale = Math.Clamp(RenderScale, 0.1f, 1.0f);
-            RenderWidth = Math.Max((int)(WindowWidth * RenderScale), 1);
-            RenderHeight = Math.Max((int)(WindowHeight * RenderScale), 1);
+            // Update render scale and dimensions
+            const float MinRenderScale = 0.1f;
+            const float MaxRenderScale = 1.0f;
+            float clampedScale = Math.Clamp(RenderScale, MinRenderScale, MaxRenderScale);
+            int renderWidth = Math.Max((int)(windowWidth * clampedScale), MinDimension);
+            int renderHeight = Math.Max((int)(windowHeight * clampedScale), MinDimension);
 
-            var newColorBuffer = new Vector4[RenderWidth * RenderHeight];
-            var newDepthBuffer = new float[RenderWidth * RenderHeight];
+            // Allocate new buffers
+            var newColorBuffer = new Vector4[renderWidth * renderHeight];
+            var newDepthBuffer = new float[renderWidth * renderHeight];
 
-            if (ColorBuffer is { Length: > 0 } oldColorBuffer &&
-                DepthBuffer is { Length: > 0 } oldDepthBuffer)
+            // Copy existing buffer data if available
+            if (ColorBuffer is not null && DepthBuffer is not null)
             {
-                int oldWidth = (int)Math.Sqrt(oldColorBuffer.Length);
-                int oldHeight = oldColorBuffer.Length / oldWidth;
+                int oldWidth = ColorBuffer.Length > 0 ? (int)Math.Sqrt(ColorBuffer.Length) : 0;
+                int oldHeight = oldWidth > 0 ? ColorBuffer.Length / oldWidth : 0;
 
-                int copyHeight = Math.Min(oldHeight, RenderHeight);
-                int copyWidth = Math.Min(oldWidth, RenderWidth);
-
-                Parallel.For(0, copyHeight, y =>
+                if (oldWidth > 0 && oldHeight > 0)
                 {
-                    int newRowStart = y * RenderWidth;
-                    int oldRowStart = y * oldWidth;
-                    for (int x = 0; x < copyWidth; x++)
+                    int copyWidth = Math.Min(oldWidth, renderWidth);
+                    int copyHeight = Math.Min(oldHeight, renderHeight);
+                    Parallel.For(0, copyHeight, y =>
                     {
-                        newColorBuffer[newRowStart + x] = oldColorBuffer[oldRowStart + x];
-                        newDepthBuffer[newRowStart + x] = oldDepthBuffer[oldRowStart + x];
-                    }
-                });
+                        Array.Copy(ColorBuffer, y * oldWidth, newColorBuffer, y * renderWidth, copyWidth);
+                        Array.Copy(DepthBuffer, y * oldWidth, newDepthBuffer, y * renderWidth, copyWidth);
+                    });
+                }
             }
 
+            // Update instance fields
+            WindowWidth = windowWidth;
+            WindowHeight = windowHeight;
+            RenderScale = clampedScale;
+            RenderWidth = renderWidth;
+            RenderHeight = renderHeight;
             ColorBuffer = newColorBuffer;
             DepthBuffer = newDepthBuffer;
 
             Gl.BindTexture(TextureTarget.Texture2D, TextureHandle);
             unsafe
             {
-                Gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgb,
-                    (uint)RenderWidth, (uint)RenderHeight, 0,
-                    PixelFormat.Rgb, PixelType.Float, null);
+                Gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32f,
+                    (uint)renderWidth, (uint)renderHeight, 0,
+                    PixelFormat.Rgba, PixelType.Float, null);
             }
 
-            Gl.Viewport(0, 0, (uint)WindowWidth, (uint)WindowHeight);
-
-            Console.WriteLine($"Resized to: {WindowWidth}x{WindowHeight} (Render: {RenderWidth}x{RenderHeight})");
+            Gl.Viewport(0, 0, (uint)windowWidth, (uint)windowHeight);
+            
+            Console.WriteLine($"Resized to: {windowWidth}x{windowHeight} (Render: {renderWidth}x{renderHeight})");
         }
 
         private void OnResize(Vector2D<int> newSize)
         {
-            HandleResize(newSize);
+            Gl.Viewport(0, 0, (uint)newSize.X, (uint)newSize.Y);
+            ScheduleResize(newSize);
         }
 
         private void OnClosing()
