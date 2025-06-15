@@ -10,7 +10,7 @@ using SDL2;
 
 namespace SoftwareRenderer
 {
-    public class Renderer : IDisposable
+    public class Renderer
     {
         private readonly ConcurrentDictionary<string, Texture> CachedTextures = new();
         private readonly Camera Camera = new();

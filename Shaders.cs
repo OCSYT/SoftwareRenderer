@@ -53,7 +53,7 @@ namespace SoftwareRenderer
             public Vector2 TexCoord;
             public Vector3 Normal;
             public Vector2 ScreenCoords;
-            public Dictionary<string, object> Data;
+            public Dictionary<string, object>? Data;
             public bool Interpolate;
             public Vector3 Barycentric;
 
@@ -79,24 +79,27 @@ namespace SoftwareRenderer
 
             Dictionary<string, object> data = new();
 
-            if (interpolate && a.Data != null && b.Data != null)
+            if (interpolate)
             {
-                foreach (var kvp in a.Data)
+                if (a.Data != null && b.Data != null)
                 {
-                    if (!b.Data.TryGetValue(kvp.Key, out var bValue))
-                        continue;
-
-                    var aValue = kvp.Value;
-                    object result = aValue switch
+                    foreach (var kvp in a.Data)
                     {
-                        float af when bValue is float bf => af * (1 - t) + bf * t,
-                        Vector2 av2 when bValue is Vector2 bv2 => Vector2.Lerp(av2, bv2, t),
-                        Vector3 av3 when bValue is Vector3 bv3 => Vector3.Lerp(av3, bv3, t),
-                        Vector4 av4 when bValue is Vector4 bv4 => Vector4.Lerp(av4, bv4, t),
-                        _ => aValue
-                    };
+                        if (!b.Data.TryGetValue(kvp.Key, out var bValue))
+                            continue;
 
-                    data[kvp.Key] = result;
+                        var aValue = kvp.Value;
+                        object result = aValue switch
+                        {
+                            float af when bValue is float bf => af * (1 - t) + bf * t,
+                            Vector2 av2 when bValue is Vector2 bv2 => Vector2.Lerp(av2, bv2, t),
+                            Vector3 av3 when bValue is Vector3 bv3 => Vector3.Lerp(av3, bv3, t),
+                            Vector4 av4 when bValue is Vector4 bv4 => Vector4.Lerp(av4, bv4, t),
+                            _ => aValue
+                        };
+
+                        data[kvp.Key] = result;
+                    }
                 }
             }
             else if (a.Data != null)
@@ -118,21 +121,27 @@ namespace SoftwareRenderer
             };
         }
 
-        public static VertexOutput Lerp3(VertexOutput a, VertexOutput b, VertexOutput c, Vector3 barycentric, bool interpolate)
+        public static VertexOutput Lerp3(VertexOutput a, VertexOutput b, VertexOutput c, Vector3 barycentric,
+            bool interpolate)
         {
             VertexOutput result = new VertexOutput
             {
-                ClipPosition = a.ClipPosition * barycentric.X + b.ClipPosition * barycentric.Y + c.ClipPosition * barycentric.Z,
+                ClipPosition = a.ClipPosition * barycentric.X + b.ClipPosition * barycentric.Y +
+                               c.ClipPosition * barycentric.Z,
                 TexCoord = a.TexCoord * barycentric.X + b.TexCoord * barycentric.Y + c.TexCoord * barycentric.Z,
-                Color = interpolate ? a.Color * barycentric.X + b.Color * barycentric.Y + c.Color * barycentric.Z : a.Color,
-                Normal = interpolate ? a.Normal * barycentric.X + b.Normal * barycentric.Y + c.Normal * barycentric.Z : a.Normal,
+                Color = interpolate
+                    ? a.Color * barycentric.X + b.Color * barycentric.Y + c.Color * barycentric.Z
+                    : a.Color,
+                Normal = interpolate
+                    ? a.Normal * barycentric.X + b.Normal * barycentric.Y + c.Normal * barycentric.Z
+                    : a.Normal,
                 ScreenCoords = Vector2.Zero,
                 Interpolate = interpolate,
                 Barycentric = barycentric,
                 Data = new Dictionary<string, object>()
             };
 
-            if (interpolate)
+            if (interpolate && a.Data != null && b.Data != null && c.Data != null)
             {
                 foreach (var kvp in a.Data)
                 {
@@ -156,17 +165,16 @@ namespace SoftwareRenderer
                     result.Data[kvp.Key] = resultVal;
                 }
             }
+            else if (a.Data != null)
+            {
+                foreach (var kvp in a.Data)
+                    result.Data[kvp.Key] = kvp.Value;
+            }
 
             return result;
         }
 
         public delegate VertexOutput VertexShader(VertexInput input, Matrix4x4 model, Matrix4x4 view, Matrix4x4 projection);
         public delegate Vector4? FragmentShader(VertexOutput input);
-    }
-
-    // Optional helper if you want XYZ() extension
-    public static class VectorExtensions
-    {
-        public static Vector3 XYZ(this Vector4 v) => new Vector3(v.X, v.Y, v.Z);
     }
 }

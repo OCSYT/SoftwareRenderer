@@ -22,22 +22,6 @@ namespace SoftwareRenderer
         public static DebugMode RenderDebugMode = DebugMode.None;
         static ParallelOptions Options = new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount };
 
-        public struct Triangle
-        {
-            public int Index0;
-            public int Index1;
-            public int Index2;
-            public Vector4 Color;
-
-            public Triangle(int index0, int index1, int index2, Vector4 color)
-            {
-                Index0 = index0;
-                Index1 = index1;
-                Index2 = index2;
-                Color = color;
-            }
-        }
-
         public enum BlendMode
         {
             None,
@@ -66,7 +50,7 @@ namespace SoftwareRenderer
         }
 
         private const float Epsilon = 1e-6f;
-        private const int TileSize = 8;
+        private const int TileSize = 16;
         private static object[] TileLocks;
         private static int TilesX, TilesY;
 
@@ -604,7 +588,7 @@ namespace SoftwareRenderer
             int tileMaxY = maxY / TileSize;
 
 
-            const float centerBias = -0.5f;
+            const float centerBias = 0;
 
             Parallel.For(tileMinY, tileMaxY + 1, tileY =>
             {
@@ -683,8 +667,8 @@ namespace SoftwareRenderer
 
                                     for (int s = 0; s < SampleOffsets.Length; s++)
                                     {
-                                        float sampleX = x + (SampleOffsets[s].X - (2 * centerBias));
-                                        float sampleY = y + (SampleOffsets[s].Y - (2 * centerBias));
+                                        float sampleX = x + (SampleOffsets[s].X);
+                                        float sampleY = y + (SampleOffsets[s].Y);
 
                                         float w0s = a12 * (sampleX - screen[1].X) + b12 * (sampleY - screen[1].Y);
                                         float w1s = a20 * (sampleX - screen[2].X) + b20 * (sampleY - screen[2].Y);
