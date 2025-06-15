@@ -683,8 +683,8 @@ namespace SoftwareRenderer
 
                                     for (int s = 0; s < SampleOffsets.Length; s++)
                                     {
-                                        float sampleX = x + SampleOffsets[s].X;
-                                        float sampleY = y + SampleOffsets[s].Y;
+                                        float sampleX = x + (SampleOffsets[s].X - (2 * centerBias));
+                                        float sampleY = y + (SampleOffsets[s].Y - (2 * centerBias));
 
                                         float w0s = a12 * (sampleX - screen[1].X) + b12 * (sampleY - screen[1].Y);
                                         float w1s = a20 * (sampleX - screen[2].X) + b20 * (sampleY - screen[2].Y);
