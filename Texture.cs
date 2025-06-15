@@ -39,6 +39,7 @@ namespace SoftwareRenderer
             _image = image;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Vector4 Sample(Vector2 uv)
         {
             float u = uv.X - (int)uv.X;

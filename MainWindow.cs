@@ -341,9 +341,10 @@ namespace SoftwareRenderer
             CloseEvent?.Invoke();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private int GetIndex(int x, int y) => y * RenderWidth + x;
 
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void SetPixel(int x, int y, Vector4 color)
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
@@ -352,7 +353,7 @@ namespace SoftwareRenderer
             }
         }
 
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Vector4 GetPixel(int x, int y)
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
@@ -361,7 +362,7 @@ namespace SoftwareRenderer
             }
             return Vector4.Zero;
         }
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void ClearColorBuffer(Vector4 clearColor)
         {
             int count = ColorBuffer.Length;
@@ -371,7 +372,7 @@ namespace SoftwareRenderer
             });
         }
 
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void SetDepth(int x, int y, float depth)
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
@@ -380,7 +381,7 @@ namespace SoftwareRenderer
             }
         }
 
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public float GetDepth(int x, int y)
         {
             if (x >= 0 && x < RenderWidth && y >= 0 && y < RenderHeight)
@@ -390,7 +391,7 @@ namespace SoftwareRenderer
             return float.MinValue;
         }
 
-
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void ClearDepthBuffer()
         {
             int count = DepthBuffer.Length;

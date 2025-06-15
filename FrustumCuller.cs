@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using SoftwareRenderer;
 
 namespace SoftwareRenderer
@@ -126,6 +127,7 @@ namespace SoftwareRenderer
             return frustum;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static Plane NormalizePlane(Vector4 planeCoefficients)
         {
             float magnitude = new Vector3(planeCoefficients.X, planeCoefficients.Y, planeCoefficients.Z).Length();
@@ -164,6 +166,8 @@ namespace SoftwareRenderer
                    TestSphereAgainstPlane(worldCenter, worldRadius, frustum.Far);
         }
 
+        
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool TestSphereAgainstPlane(Vector3 center, float radius, Plane plane)
         {
             float distance = plane.DistanceToPoint(center);
