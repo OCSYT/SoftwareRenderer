@@ -542,7 +542,7 @@ namespace SoftwareRenderer
             RasterizeTriangle(window, screenCoords, depths, outputs, fragmentShader, cullMode, depthTest, blendMode);
         }
 
-        private static readonly Vector2[] sampleOffsets = new Vector2[]
+        private static readonly Vector2[] SampleOffsets = new Vector2[]
         {
             new Vector2(0.25f, 0.25f),
             new Vector2(0.75f, 0.25f),
@@ -681,10 +681,10 @@ namespace SoftwareRenderer
                                     float finalDepth = 0f;
                                     int samplesCovered = 0;
 
-                                    for (int s = 0; s < sampleOffsets.Length; s++)
+                                    for (int s = 0; s < SampleOffsets.Length; s++)
                                     {
-                                        float sampleX = x + sampleOffsets[s].X;
-                                        float sampleY = y + sampleOffsets[s].Y;
+                                        float sampleX = x + SampleOffsets[s].X;
+                                        float sampleY = y + SampleOffsets[s].Y;
 
                                         float w0s = a12 * (sampleX - screen[1].X) + b12 * (sampleY - screen[1].Y);
                                         float w1s = a20 * (sampleX - screen[2].X) + b20 * (sampleY - screen[2].Y);
