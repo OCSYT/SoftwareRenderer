@@ -618,13 +618,11 @@ namespace SoftwareRenderer
             float w2Inv = w2 * invW2;
             float oneOverW = w0Inv + w1Inv + w2Inv;
             float w = 1.0f / oneOverW;
-
-            // Pre-compute weighted contributions
+            
             float wa = w0Inv * w;
             float wb = w1Inv * w;
             float wc = w2Inv * w;
-
-            // Interpolate attributes (assume interpolation is common case)
+            
             Vector4 clipPos = a.ClipPosition * w0Inv + b.ClipPosition * w1Inv + c.ClipPosition * w2Inv;
             clipPos *= w;
 
@@ -651,7 +649,7 @@ namespace SoftwareRenderer
                 ScreenCoords = screenCoords,
                 Data = interpolate ? InterpolateData(a.Data, b.Data, c.Data, wa, wb, wc) : a.Data,
                 Interpolate = interpolate,
-                Barycentric = new Vector3(wa, wb, wc) // Use perspective-corrected weights
+                Barycentric = new Vector3(wa, wb, wc)
             };
         }
 
@@ -677,8 +675,7 @@ namespace SoftwareRenderer
                     continue;
 
                 var aValue = kvp.Value;
-
-                // Unroll type checks for common cases
+                
                 if (aValue is float fa && bValue is float fb && cValue is float fc)
                 {
                     result[key] = fa * w0 + fb * w1 + fc * w2;

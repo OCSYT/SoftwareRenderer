@@ -30,7 +30,7 @@ namespace SoftwareRenderer
             public Vector2 TexCoord;
             public Vector3 Normal;
             public Vector2 ScreenCoords;
-            public Dictionary<string, object> Data = new Dictionary<string, object>();
+            public Dictionary<string, object>? Data = new Dictionary<string, object>();
             public bool Interpolate;
             public Vector3 Barycentric;
 
