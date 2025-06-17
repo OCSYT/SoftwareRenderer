@@ -464,7 +464,7 @@ namespace SoftwareRenderer
             var depthFunc = GetDepthTestFunction(depthTest);
             bool needsDepthTest = depthTest != DepthTest.Disabled;
             bool canEarlyOut = blendMode == BlendMode.None;
-            
+
             float minXf = MathF.Min(MathF.Min(screen[0].X, screen[1].X), screen[2].X);
             float maxXf = MathF.Max(MathF.Max(screen[0].X, screen[1].X), screen[2].X);
             float minYf = MathF.Min(MathF.Min(screen[0].Y, screen[1].Y), screen[2].Y);
@@ -608,46 +608,68 @@ namespace SoftwareRenderer
             float w2,
             bool interpolate = true)
         {
-            // Compute perspective correction factors
-            float invW0 = 1.0f / a.ClipPosition.W;
-            float invW1 = 1.0f / b.ClipPosition.W;
-            float invW2 = 1.0f / c.ClipPosition.W;
+            // Single reciprocal calculation and reuse
+            float rcpWa = w0 / a.ClipPosition.W;
+            float rcpWb = w1 / b.ClipPosition.W;
+            float rcpWc = w2 / c.ClipPosition.W;
+            float invWSum = rcpWa + rcpWb + rcpWc;
 
-            float w0Inv = w0 * invW0;
-            float w1Inv = w1 * invW1;
-            float w2Inv = w2 * invW2;
-            float oneOverW = w0Inv + w1Inv + w2Inv;
-            float w = 1.0f / oneOverW;
-            
-            float wa = w0Inv * w;
-            float wb = w1Inv * w;
-            float wc = w2Inv * w;
-            
-            Vector4 clipPos = a.ClipPosition * w0Inv + b.ClipPosition * w1Inv + c.ClipPosition * w2Inv;
-            clipPos *= w;
+            // Single reciprocal for perspective correction
+            float w = 1.0f / invWSum;
+            float wa = rcpWa * w;
+            float wb = rcpWb * w;
+            float wc = rcpWc * w;
 
-            Vector2 texCoord = a.TexCoord * w0Inv + b.TexCoord * w1Inv + c.TexCoord * w2Inv;
-            texCoord *= w;
+            // Vectorized interpolation using SIMD-friendly operations
+            Vector4 clipPosition = Vector4.Multiply(a.ClipPosition, rcpWa);
+            clipPosition = Vector4.Add(clipPosition, Vector4.Multiply(b.ClipPosition, rcpWb));
+            clipPosition = Vector4.Add(clipPosition, Vector4.Multiply(c.ClipPosition, rcpWc));
+            clipPosition = Vector4.Multiply(clipPosition, w);
 
-            Vector2 screenCoords = a.ScreenCoords * w0Inv + b.ScreenCoords * w1Inv + c.ScreenCoords * w2Inv;
-            screenCoords *= w;
+            Vector2 texCoord = Vector2.Multiply(a.TexCoord, rcpWa);
+            texCoord = Vector2.Add(texCoord, Vector2.Multiply(b.TexCoord, rcpWb));
+            texCoord = Vector2.Add(texCoord, Vector2.Multiply(c.TexCoord, rcpWc));
+            texCoord = Vector2.Multiply(texCoord, w);
 
-            Vector3 normal = interpolate
-                ? (a.Normal * w0Inv + b.Normal * w1Inv + c.Normal * w2Inv) * w
-                : a.Normal;
+            Vector2 screenCoords = Vector2.Multiply(a.ScreenCoords, rcpWa);
+            screenCoords = Vector2.Add(screenCoords, Vector2.Multiply(b.ScreenCoords, rcpWb));
+            screenCoords = Vector2.Add(screenCoords, Vector2.Multiply(c.ScreenCoords, rcpWc));
+            screenCoords = Vector2.Multiply(screenCoords, w);
 
-            Vector4 color = interpolate
-                ? (a.Color * w0Inv + b.Color * w1Inv + c.Color * w2Inv) * w
-                : a.Color;
+            // Conditional interpolation with minimal branching
+            Vector3 normal;
+            Vector4 color;
+            Dictionary<string, object>? data;
+
+            if (interpolate)
+            {
+                normal = Vector3.Multiply(a.Normal, rcpWa);
+                normal = Vector3.Add(normal, Vector3.Multiply(b.Normal, rcpWb));
+                normal = Vector3.Add(normal, Vector3.Multiply(c.Normal, rcpWc));
+                normal = Vector3.Multiply(normal, w);
+
+                color = Vector4.Multiply(a.Color, rcpWa);
+                color = Vector4.Add(color, Vector4.Multiply(b.Color, rcpWb));
+                color = Vector4.Add(color, Vector4.Multiply(c.Color, rcpWc));
+                color = Vector4.Multiply(color, w);
+
+                data = InterpolateData(a.Data, b.Data, c.Data, wa, wb, wc);
+            }
+            else
+            {
+                normal = a.Normal;
+                color = a.Color;
+                data = a.Data;
+            }
 
             return new Shaders.VertexOutput
             {
-                ClipPosition = clipPos,
-                Color = color,
+                ClipPosition = clipPosition,
                 TexCoord = texCoord,
-                Normal = normal,
                 ScreenCoords = screenCoords,
-                Data = interpolate ? InterpolateData(a.Data, b.Data, c.Data, wa, wb, wc) : a.Data,
+                Normal = normal,
+                Color = color,
+                Data = data,
                 Interpolate = interpolate,
                 Barycentric = new Vector3(wa, wb, wc)
             };
@@ -662,40 +684,58 @@ namespace SoftwareRenderer
             float w1,
             float w2)
         {
-            if (aData == null || bData == null || cData == null)
-                return null;
+            // Early exit for null cases
+            if (aData == null) return bData ?? cData;
+            if (bData == null || cData == null) return aData;
 
-            // Assume consistent keys; precompute size to avoid resizing
+            // Pre-allocate with exact size to avoid resizing
             var result = new Dictionary<string, object>(aData.Count);
 
+            // Use enumerator directly for better performance
             foreach (var kvp in aData)
             {
-                string key = kvp.Key;
-                if (!bData.TryGetValue(key, out var bValue) || !cData.TryGetValue(key, out var cValue))
-                    continue;
-
+                var key = kvp.Key;
                 var aValue = kvp.Value;
-                
-                if (aValue is float fa && bValue is float fb && cValue is float fc)
+
+                // Use pattern matching for better branch prediction
+                if (bData.TryGetValue(key, out var bValue) &&
+                    cData.TryGetValue(key, out var cValue))
                 {
-                    result[key] = fa * w0 + fb * w1 + fc * w2;
-                }
-                else if (aValue is Vector2 va2 && bValue is Vector2 vb2 && cValue is Vector2 vc2)
-                {
-                    result[key] = va2 * w0 + vb2 * w1 + vc2 * w2;
-                }
-                else if (aValue is Vector3 va3 && bValue is Vector3 vb3 && cValue is Vector3 vc3)
-                {
-                    var interpolated = va3 * w0 + vb3 * w1 + vc3 * w2;
-                    result[key] = interpolated.LengthSquared() > 1e-6f ? Vector3.Normalize(interpolated) : interpolated;
-                }
-                else if (aValue is Vector4 va4 && bValue is Vector4 vb4 && cValue is Vector4 vc4)
-                {
-                    result[key] = va4 * w0 + vb4 * w1 + vc4 * w2;
+                    // Inline type-specific interpolation for better performance
+                    switch (aValue)
+                    {
+                        case float fa when bValue is float fb && cValue is float fc:
+                            result[key] = fa * w0 + fb * w1 + fc * w2;
+                            break;
+
+                        case Vector2 va2 when bValue is Vector2 vb2 && cValue is Vector2 vc2:
+                            result[key] = Vector2.Multiply(va2, w0) + Vector2.Multiply(vb2, w1) +
+                                          Vector2.Multiply(vc2, w2);
+                            break;
+
+                        case Vector3 va3 when bValue is Vector3 vb3 && cValue is Vector3 vc3:
+                            var interpolated = Vector3.Multiply(va3, w0) + Vector3.Multiply(vb3, w1) +
+                                               Vector3.Multiply(vc3, w2);
+                            // Avoid expensive square root when possible
+                            var lengthSq = interpolated.LengthSquared();
+                            result[key] = lengthSq > 1e-6f
+                                ? Vector3.Multiply(interpolated, 1.0f / MathF.Sqrt(lengthSq))
+                                : interpolated;
+                            break;
+
+                        case Vector4 va4 when bValue is Vector4 vb4 && cValue is Vector4 vc4:
+                            result[key] = Vector4.Multiply(va4, w0) + Vector4.Multiply(vb4, w1) +
+                                          Vector4.Multiply(vc4, w2);
+                            break;
+
+                        default:
+                            result[key] = aValue;
+                            break;
+                    }
                 }
                 else
                 {
-                    result[key] = aValue; // Fallback for non-interpolated types
+                    result[key] = aValue;
                 }
             }
 

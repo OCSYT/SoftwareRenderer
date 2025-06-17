@@ -184,7 +184,7 @@ namespace SoftwareRenderer
                 foreach (var mesh in PlayerModel.Meshes)
                 {
                     if (Physics.Raycast(rayOrigin, rayDirection, mesh.Vertices.ToArray(), mesh.Indices.ToArray(), playerMatrix,
-                        out float distance, out Vector3 point, out Vector3 normal, RaycastFaceMask.IgnoreBackfaces) && distance < closestHit.Distance)
+                        out float distance, out Vector3 point, out Vector3 normal) && distance < closestHit.Distance)
                     {
                         lock (new object())
                         {
@@ -202,7 +202,7 @@ namespace SoftwareRenderer
                 Parallel.ForEach(Dust2Model.Meshes, mesh =>
                 {
                     if (Physics.Raycast(rayOrigin, rayDirection, mesh.Vertices.ToArray(), mesh.Indices.ToArray(), ModelMatrix,
-                        out float distance, out Vector3 point, out Vector3 normal, RaycastFaceMask.IgnoreBackfaces) && distance < closestHit.Distance)
+                        out float distance, out Vector3 point, out Vector3 normal) && distance < closestHit.Distance)
                     {
                         lock (new object())
                         {
