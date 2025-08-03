@@ -92,109 +92,73 @@ namespace SoftwareRenderer
             }
         }
 
-
-        private static IEnumerable<Shaders.VertexOutput[]> ClipTriangleAgainstNearPlane(
-            Shaders.VertexOutput V0, Shaders.VertexOutput V1, Shaders.VertexOutput V2)
+        private static List<Shaders.VertexOutput[]> ClipTriangleAgainstNearPlane(
+            Shaders.VertexOutput v0,
+            Shaders.VertexOutput v1,
+            Shaders.VertexOutput v2)
         {
-            const float ClipEpsilon = 1e-5f;
+            var outputTriangles = new List<Shaders.VertexOutput[]>();
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static bool IsInside(in Vector4 ClipPosition) =>
-                ClipPosition.Z >= -ClipPosition.W - ClipEpsilon;
+            // List to hold vertices after clipping
+            var inputVertices = new List<Shaders.VertexOutput> { v0, v1, v2 };
+            var clippedVertices = new List<Shaders.VertexOutput>();
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            static Shaders.VertexOutput Intersect(in Shaders.VertexOutput A, in Shaders.VertexOutput B)
+            // Clip against near plane (z >= NearClip * w in clip space)
+            for (int i = 0; i < inputVertices.Count; i++)
             {
-                Vector4 P0 = A.ClipPosition;
-                Vector4 P1 = B.ClipPosition;
+                var current = inputVertices[i];
+                var next = inputVertices[(i + 1) % inputVertices.Count];
 
-                float D0 = P0.Z + P0.W;
-                float D1 = P1.Z + P1.W;
-                float Denom = D0 - D1;
+                bool currentInside = current.ClipPosition.Z >= NearClip * current.ClipPosition.W;
+                bool nextInside = next.ClipPosition.Z >= NearClip * next.ClipPosition.W;
 
-                float T = Math.Abs(Denom) < float.Epsilon ? 0f : Math.Clamp(D0 / Denom, 0f, 1f);
-                return Shaders.Lerp(A, B, T, A.Interpolate);
-            }
-
-            static void ClipSingleTriangle(
-                in Shaders.VertexOutput A, in Shaders.VertexOutput B, in Shaders.VertexOutput C,
-                Shaders.VertexOutput[] OutputVertices, List<Shaders.VertexOutput[]> Results,
-                ArrayPool<Shaders.VertexOutput> ArrayPool)
-            {
-                bool AIn = IsInside(A.ClipPosition);
-                bool BIn = IsInside(B.ClipPosition);
-                bool CIn = IsInside(C.ClipPosition);
-
-                // Early out if all are outside
-                if (!AIn && !BIn && !CIn)
-                    return;
-
-                // All inside
-                if (AIn && BIn && CIn)
+                if (currentInside)
                 {
-                    var Triangle = ArrayPool.Rent(3);
-                    Triangle[0] = A;
-                    Triangle[1] = B;
-                    Triangle[2] = C;
-                    Results.Add(Triangle);
-                    return;
+                    clippedVertices.Add(current);
                 }
 
-                int VertexCount = 0;
-
-                void AddVertex(in Shaders.VertexOutput V)
+                if (currentInside != nextInside)
                 {
-                    if (VertexCount < OutputVertices.Length)
-                        OutputVertices[VertexCount++] = V;
-                }
+                    // Interpolate vertex at the near plane
+                    float t;
+                    float z0 = current.ClipPosition.Z;
+                    float w0 = current.ClipPosition.W;
+                    float z1 = next.ClipPosition.Z;
+                    float w1 = next.ClipPosition.W;
 
-                void ClipEdge(in Shaders.VertexOutput Prev, in Shaders.VertexOutput Curr, bool PrevIn, bool CurrIn)
-                {
-                    if (PrevIn)
+                    // Linearly interpolate in clip space: z = NearClip * w
+                    // Solve for t where: z0 + t * (z1 - z0) = NearClip * (w0 + t * (w1 - w0))
+                    float denom = (z1 - z0) - NearClip * (w1 - w0);
+                    if (Math.Abs(denom) < Epsilon)
                     {
-                        AddVertex(Prev);
-                        if (!CurrIn)
-                            AddVertex(Intersect(Prev, Curr));
+                        t = 0.5f; // Fallback to avoid division by zero
                     }
-                    else if (CurrIn)
+                    else
                     {
-                        AddVertex(Intersect(Prev, Curr));
+                        t = (z0 - NearClip * w0) / (NearClip * (w1 - w0) - (z1 - z0));
+                        t = Math.Clamp(t, 0f, 1f);
                     }
-                }
 
-                ClipEdge(A, B, AIn, BIn);
-                ClipEdge(B, C, BIn, CIn);
-                ClipEdge(C, A, CIn, AIn);
-
-                if (VertexCount < 3)
-                    return;
-
-                var VStart = OutputVertices[0];
-                for (int I = 1; I < VertexCount - 1; I++)
-                {
-                    var Triangle = ArrayPool.Rent(3);
-                    Triangle[0] = VStart;
-                    Triangle[1] = OutputVertices[I];
-                    Triangle[2] = OutputVertices[I + 1];
-                    Results.Add(Triangle);
+                    var interpolated = Shaders.Lerp(current, next, t, true);
+                    clippedVertices.Add(interpolated);
                 }
             }
 
-            var Pool = ArrayPool<Shaders.VertexOutput>.Shared;
-            var OutputBuffer = Pool.Rent(6);
-            var Results = new List<Shaders.VertexOutput[]>(4);
+            // If we have fewer than 3 vertices after clipping, no triangle is formed
+            if (clippedVertices.Count < 3)
+            {
+                return outputTriangles;
+            }
 
-            try
+            // Triangulate the clipped polygon (fan triangulation)
+            for (int i = 1; i < clippedVertices.Count - 1; i++)
             {
-                ClipSingleTriangle(V0, V1, V2, OutputBuffer, Results, Pool);
-                return Results;
+                outputTriangles.Add(new[] { clippedVertices[0], clippedVertices[i], clippedVertices[i + 1] });
             }
-            finally
-            {
-                Pool.Return(OutputBuffer);
-            }
+
+            return outputTriangles;
         }
-
+        
 
         public static void RenderMesh(
             MainWindow window,

@@ -68,6 +68,11 @@ namespace SoftwareRenderer
         
         public Model LoadModel(string filePath)
         {
+            // If filePath is not rooted, resolve relative to AppContext.BaseDirectory
+            if (!Path.IsPathRooted(filePath))
+            {
+                filePath = Path.Combine(AppContext.BaseDirectory, filePath.TrimStart('.', '/', '\\'));
+            }
             string normalizedPath = Path.GetFullPath(filePath);
 
             // Check if this is a directory containing animation frames

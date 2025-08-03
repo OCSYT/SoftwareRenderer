@@ -303,7 +303,7 @@ namespace SoftwareRenderer
             if (!IsMouseLocked) RenderDebugUserInterface(deltaTime);
             if (!IsLayoutLoaded)
             {
-                ImGui.LoadIniSettingsFromDisk("./Layouts/DefaultLayout.ini");
+                ImGui.LoadIniSettingsFromDisk("./Assets/Layouts/DefaultLayout.ini");
                 IsLayoutLoaded = true;
             }
         }
@@ -957,7 +957,7 @@ namespace SoftwareRenderer
                             float.Parse(parameters[2]));
                         float Distance = Vector3.Distance(Camera.Position, Position);
                         float Volume = Math.Clamp(25f / (0.25f * Distance), 0f, 25f); // SFML style volume 0-100
-                        string FilePath = "./Assets/pistol.wav";
+                        string FilePath = Path.Combine(AppContext.BaseDirectory, "Assets/pistol.wav");
                         Sounds.PlaySound(FilePath, Volume / 100);
                         break;
                 }
